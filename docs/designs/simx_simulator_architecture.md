@@ -105,8 +105,11 @@ atomics, threads, locks, or deferred-call plumbing — enforced by
 
 **Functional units**
 - `alu_unit`, `fpu_unit` — own private `execute()` (ISA semantics).
-- `lsu_unit` — loads/stores/AMO; `LsuUopGen` for packed loads; pulls load
-  data from `MemRsp::data`.
+- `lsu_unit` — loads/stores/AMO; `LsuUopGen` for packed loads, wide loads/stores and
+  matrix fragment loads/stores (`vx_ldm`/`vx_stm`, whose geometry and register order
+  `frag::ldm_uop` in `fragment_layout.h` derives from the fragment register
+  permutations the TCU's WMMA expansion also reads with); pulls load data from
+  `MemRsp::data`.
 - `sfu_unit` — special-function dispatcher routing to sub-units: WCTL,
   CSR, TEX, RASTER, DXA, OM.
 - `csr_unit`, `wctl_unit` — SFU sub-units (CSR/FCSR/MPM; warp control →
@@ -118,7 +121,9 @@ atomics, threads, locks, or deferred-call plumbing — enforced by
 - `cache.{cpp,h}` — `Cache`: tags + MSHRs + replacement **and line data**;
   embeds the AMO unit.
 - `cache_cluster` — shared L2/L3 wrapper.
-- `memory.{cpp,h}` — `Memory`: bottom-of-hierarchy DRAM (ramulator2);
+- `memory.{cpp,h}` — `Memory`: bottom-of-hierarchy DRAM, one channel per
+  platform memory bank timed by `sim/common/dram_sim` (ramulator2, shared with
+  rtlsim/opaesim/xrtsim; see [Configuring the DRAM Model](../simulation.md#configuring-the-dram-model));
   `attach_ram(RAM*)` owns the image; carries data in `MemRsp`; exposes
   `set_pre_send_hook` for SST mirroring.
 - `amo/amo_unit.{cpp,h}` — AMO RMW in the cache hierarchy (see

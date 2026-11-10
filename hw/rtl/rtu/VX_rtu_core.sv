@@ -53,6 +53,10 @@ module VX_rtu_core import VX_gpu_pkg::*, VX_rtu_pkg::*; #(
     input wire clk,
     input wire reset,
 
+`ifdef PERF_ENABLE
+    output rtu_perf_t    perf_rtu,
+`endif
+
     // window bus (this core is the master)
     VX_rtu_bus_if.slave  rtu_bus_if,
 
@@ -156,11 +160,11 @@ module VX_rtu_core import VX_gpu_pkg::*, VX_rtu_pkg::*; #(
     reg [NUM_SLOTS-1:0][2:0]           tstate;
 
     reg [NUM_SLOTS-1:0][NUM_LANES-1:0] req_mask;
-    reg [NUM_SLOTS-1:0][TAG_WIDTH-1:0] req_tag;
-    reg [NUM_SLOTS-1:0][STG_IDX_W-1:0] req_stg;      // the staging entry it launched from
-    reg [NUM_SLOTS-1:0][NW_WIDTH-1:0]  req_wid;      // its warp, for the window write
-    reg [NUM_SLOTS-1:0][31:0]          req_payload;  // warp-uniform; staged for the callbacks
-    reg [NUM_SLOTS-1:0]                is_cand;
+    reg [NUM_SLOTS-1:0][TAG_WIDTH-1:0]    req_tag;
+    reg [NUM_SLOTS-1:0][STG_IDX_W-1:0]    req_stg;      // the staging entry it launched from
+    reg [NUM_SLOTS-1:0][NW_WIDTH-1:0]     req_wid;      // its warp, for the window write
+    reg [NUM_SLOTS-1:0][`VX_CFG_XLEN-1:0] req_payload;  // warp-uniform; staged for the callbacks
+    reg [NUM_SLOTS-1:0]                   is_cand;
     reg [NUM_SLOTS-1:0][NUM_LANES-1:0][RTU_CB_ACTION_BITS-1:0] cont_action;
 
     // ── the scheduler ─────────────────────────────────────────────────
@@ -196,6 +200,10 @@ module VX_rtu_core import VX_gpu_pkg::*, VX_rtu_pkg::*; #(
 
     `UNUSED_VAR (sch_busy)
 
+`ifdef PERF_ENABLE
+    rtu_sched_events_t sch_events;
+`endif
+
     VX_rtu_scheduler #(
         .INSTANCE_ID (INSTANCE_ID),
         .NUM_SLOTS   (NUM_SLOTS),
@@ -203,6 +211,9 @@ module VX_rtu_core import VX_gpu_pkg::*, VX_rtu_pkg::*; #(
     ) scheduler (
         .clk              (clk),
         .reset            (reset),
+    `ifdef PERF_ENABLE
+        .perf_events      (sch_events),
+    `endif
         .slot_start_valid (ss_valid),
         .slot_start_slot  (ss_slot),
         .slot_start_mask  (ss_mask),
@@ -244,7 +255,8 @@ module VX_rtu_core import VX_gpu_pkg::*, VX_rtu_pkg::*; #(
     localparam RTU_LINE_ADDRW = `VX_CFG_MEM_ADDR_WIDTH - `CLOG2(RTU_LINE_SIZE);
     `UNUSED_VAR (m_req_addr[`CLOG2(RTU_LINE_SIZE)-1:0])
 
-    `STATIC_ASSERT(CTX_TAG_W <= $bits(cache_bus_w.req_data.tag.value),
+    localparam CACHE_TAG_VALUE_W = CACHE_TAG_WIDTH - UUID_WIDTH;
+    `STATIC_ASSERT(CTX_TAG_W <= CACHE_TAG_VALUE_W,
         ("rtu fetch tag (%0d bits) does not fit the rtcache tag field", CTX_TAG_W))
 
     assign cache_bus_w.req_valid        = m_req_valid;
@@ -253,7 +265,7 @@ module VX_rtu_core import VX_gpu_pkg::*, VX_rtu_pkg::*; #(
     assign cache_bus_w.req_data.data    = '0;
     assign cache_bus_w.req_data.byteen  = {RTU_LINE_SIZE{1'b1}};
     assign cache_bus_w.req_data.tag.uuid  = '0;
-    assign cache_bus_w.req_data.tag.value = $bits(cache_bus_w.req_data.tag.value)'(m_req_tag);
+    assign cache_bus_w.req_data.tag.value = CACHE_TAG_VALUE_W'(m_req_tag);
     assign cache_bus_w.req_data.attr    = '0;
     assign m_req_ready = cache_bus_w.req_ready;
 
@@ -316,7 +328,7 @@ module VX_rtu_core import VX_gpu_pkg::*, VX_rtu_pkg::*; #(
     );
 
     // warp-uniform scalars of a staged trace (read once, at the claim)
-    localparam SCLW = NUM_LANES + TAG_WIDTH + 32 + `VX_CFG_MEM_ADDR_WIDTH + 16 + 16;
+    localparam SCLW = NUM_LANES + TAG_WIDTH + `VX_CFG_XLEN + `VX_CFG_MEM_ADDR_WIDTH + 16 + 16;
     wire [SCLW-1:0] stg_scl_rdata;
     wire [SLOT_W-1:0]    fill_slot_pick;
     wire [STG_IDX_W-1:0] fill_stg_pick;
@@ -342,11 +354,11 @@ module VX_rtu_core import VX_gpu_pkg::*, VX_rtu_pkg::*; #(
         .raddr (fill_stg_pick),
         .rdata (stg_scl_rdata)
     );
-    wire [NUM_LANES-1:0] scl_mask;
-    wire [TAG_WIDTH-1:0] scl_tag;
-    wire [31:0]          scl_payload;
+    wire [NUM_LANES-1:0]              scl_mask;
+    wire [TAG_WIDTH-1:0]              scl_tag;
+    wire [`VX_CFG_XLEN-1:0]           scl_payload;
     wire [`VX_CFG_MEM_ADDR_WIDTH-1:0] scl_scene;
-    wire [15:0]          scl_flags, scl_cull;
+    wire [15:0]                       scl_flags, scl_cull;
     assign {scl_mask, scl_tag, scl_payload, scl_scene, scl_flags, scl_cull} = stg_scl_rdata;
 
     // ── the fill engine ───────────────────────────────────────────────
@@ -491,7 +503,7 @@ module VX_rtu_core import VX_gpu_pkg::*, VX_rtu_pkg::*; #(
     //   7..12  object ray (candidate only) — the staging RAM's beat rows
     //   13,14  cb_type (flag flops), sbt (window row)
     //   15     cb_handle (0)
-    //   then   payload (descriptor), hitAttribute (window row), status LAST
+    //   then   payload (descriptor, XLEN/32 words), hitAttribute (window row), status LAST
     localparam [2:0] WB_IDLE = 3'd0,
                      WB_RD1  = 3'd1,
                      WB_CAP1 = 3'd2,
@@ -505,9 +517,10 @@ module VX_rtu_core import VX_gpu_pkg::*, VX_rtu_pkg::*; #(
 
     wire [RTU_IDX_BITS-1:0] n_attrs = is_cand[ws] ? RTU_IDX_BITS'(RTU_RES_CAND)
                                                   : RTU_IDX_BITS'(RTU_RES_HIT);
-    wire wr_payload = (wr_idx == n_attrs);
-    wire wr_attr    = (wr_idx == (n_attrs + RTU_IDX_BITS'(1)));
-    wire wr_status  = (wr_idx == (n_attrs + RTU_IDX_BITS'(2)));
+    wire wr_pl_hi   = (RTU_PAYLOAD_WORDS > 1) && (wr_idx == (n_attrs + RTU_IDX_BITS'(1)));
+    wire wr_payload = (wr_idx == n_attrs) || wr_pl_hi;
+    wire wr_attr    = (wr_idx == (n_attrs + RTU_IDX_BITS'(RTU_PAYLOAD_WORDS)));
+    wire wr_status  = (wr_idx == (n_attrs + RTU_IDX_BITS'(RTU_PAYLOAD_WORDS + 1)));
     wire wr_hitspan = (wr_idx < RTU_IDX_BITS'(RTU_RES_HIT));
     wire wr_objray  = is_cand[ws] && !wr_hitspan && (wr_idx < RTU_IDX_BITS'(13));
     wire wr_cbtype  = is_cand[ws] && (wr_idx == RTU_IDX_BITS'(13));
@@ -570,7 +583,8 @@ module VX_rtu_core import VX_gpu_pkg::*, VX_rtu_pkg::*; #(
             if (wr_status) begin
                 win_word[i] = status_word[i];
             end else if (wr_payload) begin
-                win_word[i] = req_payload[ws];
+                win_word[i] = wr_pl_hi ? req_payload[ws][`VX_CFG_XLEN-1 -: 32]
+                                       : req_payload[ws][31:0];
             end else if (wr_attr) begin
                 win_word[i] = sch_attrv[wctx[i]] ? wb_d1[i*32 +: 32] : 32'd0;
             end else if (wr_hitspan) begin
@@ -608,7 +622,7 @@ module VX_rtu_core import VX_gpu_pkg::*, VX_rtu_pkg::*; #(
     assign rtu_bus_w.win_data.mask    = (is_cand[ws] && !wr_uniform) ? wr_cb_mask : req_mask[ws];
     assign rtu_bus_w.win_data.slot    =
           wr_status  ? RTU_SLOT_BITS'(RTU_STATUS_SLOT)
-        : wr_payload ? RTU_SLOT_BITS'(RTU_PAYLOAD_SLOT)
+        : wr_payload ? RTU_SLOT_BITS'(RTU_PAYLOAD_SLOT) + RTU_SLOT_BITS'(wr_pl_hi)
         : wr_attr    ? RTU_SLOT_BITS'(RTU_ATTR_SLOT)
                      : RTU_SLOT_BITS'(RTU_RES_BASE) + RTU_SLOT_BITS'(wr_idx);
 
@@ -784,45 +798,65 @@ module VX_rtu_core import VX_gpu_pkg::*, VX_rtu_pkg::*; #(
         end
     end
 
-// ── RTU occupancy counters ────────────────────────────────────────────────
-`ifdef DBG_RTU_OCC
-    longint unsigned occ_total, occ_busy, occ_write, occ_cb, occ_fill;
-    longint unsigned occ_idle_ray_waiting, occ_idle_starved, occ_traces;
+`ifdef PERF_ENABLE
+    localparam LANE_CNT_W = `CLOG2(NUM_LANES + 1);
+
+    // A record's lanes are counted once, when its status word (the last) goes out.
+    wire perf_rec_done = win_fire && wr_status;
+    wire perf_term     = perf_rec_done && !is_cand[ws];
+    wire perf_cand     = perf_rec_done && is_cand[ws];
+
+    wire [NUM_LANES-1:0] ws_hit = sch_hit[32'(ws)*NUM_LANES +: NUM_LANES];
+
+    // Shader callbacks: any-hit and intersection candidates returned to the warp.
+    wire [NUM_LANES-1:0] ws_cb;
+    for (genvar l = 0; l < NUM_LANES; ++l) begin : g_perf_cb
+        assign ws_cb[l] = wr_cb_mask[l]
+                       && ((sch_cbtype[wctx[l]] == RTU_CB_TYPE_BITS'(`VX_RT_CB_TYPE_ANYHIT))
+                        || (sch_cbtype[wctx[l]] == RTU_CB_TYPE_BITS'(`VX_RT_CB_TYPE_PROC)));
+    end
+
+    wire [NUM_LANES-1:0] perf_ray_lanes = ss_valid  ? ss_mask : '0;
+    wire [NUM_LANES-1:0] perf_hit_lanes = perf_term ? (req_mask[ws] & ws_hit) : '0;
+    wire [NUM_LANES-1:0] perf_cb_lanes  = perf_cand ? ws_cb : '0;
+
+    wire [LANE_CNT_W-1:0] perf_rays_cnt, perf_hits_cnt, perf_cb_cnt;
+    `POP_COUNT(perf_rays_cnt, perf_ray_lanes);
+    `POP_COUNT(perf_hits_cnt, perf_hit_lanes);
+    `POP_COUNT(perf_cb_cnt,   perf_cb_lanes);
+
+    // The per-cycle increments are registered so the counter adders stay off
+    // the scheduler's and the record walk's timing paths.
+    rtu_sched_events_t    sch_events_r;
+    reg                   busy_r;
+    reg [LANE_CNT_W-1:0]  rays_r, hits_r, cb_r;
+    rtu_perf_t            perf_rtu_r;
+
     always @(posedge clk) begin
         if (reset) begin
-            occ_total <= 0; occ_busy <= 0; occ_write <= 0; occ_cb <= 0;
-            occ_fill <= 0; occ_idle_ray_waiting <= 0; occ_idle_starved <= 0;
-            occ_traces <= 0;
+            sch_events_r <= '0;
+            busy_r       <= 1'b0;
+            rays_r       <= '0;
+            hits_r       <= '0;
+            cb_r         <= '0;
+            perf_rtu_r   <= '0;
         end else begin
-            occ_total <= occ_total + 1;
-            if (ss_valid) begin
-                occ_traces <= occ_traces + 1;
-            end
-            for (integer s = 0; s < NUM_SLOTS; s = s + 1) begin
-                case (tstate[s])
-                T_BUSY:   occ_busy  <= occ_busy + 1;
-                T_WRITE:  occ_write <= occ_write + 1;
-                T_FILL:   occ_fill  <= occ_fill + 1;
-                T_CBWAIT, T_CBATTR, T_RESUME, T_RWAIT: occ_cb <= occ_cb + 1;
-                T_IDLE: begin
-                    if ((| stg_ready) || (fstate == F_RUN)) begin
-                        occ_idle_ray_waiting <= occ_idle_ray_waiting + 1;
-                    end else begin
-                        occ_idle_starved <= occ_idle_starved + 1;
-                    end
-                end
-                default:;
-                endcase
-            end
+            sch_events_r <= sch_events;
+            busy_r       <= ~(& slot_free);
+            rays_r       <= perf_rays_cnt;
+            hits_r       <= perf_hits_cnt;
+            cb_r         <= perf_cb_cnt;
+
+            perf_rtu_r.rays      <= perf_rtu_r.rays      + PERF_CTR_BITS'(rays_r);
+            perf_rtu_r.hits      <= perf_rtu_r.hits      + PERF_CTR_BITS'(hits_r);
+            perf_rtu_r.box_tests <= perf_rtu_r.box_tests + PERF_CTR_BITS'(sch_events_r.box_test);
+            perf_rtu_r.tri_tests <= perf_rtu_r.tri_tests + PERF_CTR_BITS'(sch_events_r.tri_test);
+            perf_rtu_r.callbacks <= perf_rtu_r.callbacks + PERF_CTR_BITS'(cb_r);
+            perf_rtu_r.busy      <= perf_rtu_r.busy      + PERF_CTR_BITS'(busy_r);
         end
     end
-    always @(posedge clk) begin
-        if (!reset && (occ_total % 40000 == 39999)) begin
-            $display("RTU-OCC @%0d: traces=%0d | busy=%0d write=%0d cb=%0d fill=%0d | IDLE_ray_waiting=%0d IDLE_STARVED=%0d",
-                occ_total, occ_traces, occ_busy, occ_write, occ_cb, occ_fill,
-                occ_idle_ray_waiting, occ_idle_starved);
-        end
-    end
+
+    assign perf_rtu = perf_rtu_r;
 `endif
 
 endmodule

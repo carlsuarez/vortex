@@ -152,7 +152,7 @@ public:
 
   void reset() {
     cycle_ = 0;
-    perf_stats_ = RasterCore::PerfStats();
+    // perf_stats_ survives: the MPM counters run from device reset.
     reset_load_state();
     state_ = State::IDLE;
     // The per-launch reset precedes the delegated launch's frame kick, so both
@@ -968,7 +968,7 @@ private:
       uint32_t local = req.core_id - base_core_;
       auto& q = quad_queues_[local];
       for (uint32_t t = 0; t < VX_CFG_NUM_THREADS; ++t) {
-        if (!(req.tmask_bits & (1u << t))) continue;
+        if (!(req.tmask_bits & (uint64_t(1) << t))) continue;
         if (q.empty()) continue;
         rsp.stamps[t] = q.front();
         q.pop();

@@ -140,20 +140,20 @@ public:
       rsp.warp_id  = anchor_warp;
       rsp.block_id = 0;        // CB_YIELD doesn't carry a parked trace;
       rsp.trace    = nullptr;  // SfuUnit drain only reads warp_id.
-      uint32_t cb_mask = 0;
+      uint64_t cb_mask = 0;
       auto it = queue_.begin();
       while (it != queue_.end()) {
         if (it->warp_id != anchor_warp || it->sbt_idx != anchor_sbt) {
           ++it; continue;
         }
         uint8_t t = it->lane;
-        if (cb_mask & (1u << t)) {
+        if (cb_mask & (uint64_t(1) << t)) {
           // Lane already grouped for this CB_YIELD — defer the second candidate
           // to a future reformation pass so the kernel doesn't see two
           // conflicting payloads in one trap.
           ++it; continue;
         }
-        cb_mask |= (1u << t);
+        cb_mask |= (uint64_t(1) << t);
         rsp.cb_type[t]            = it->cb_type;
         // Per-lane yield status returned to the warp's WAIT: ANYHIT candidate
         // -> YIELD_ANYHIT, procedural -> YIELD_PROC.
@@ -184,10 +184,8 @@ public:
       port.send(rsp);
       warp_cb_inflight_[anchor_warp] = true;
       ++perf_.reformation_yields;
-      // cb_type is uniform within a batched yield (grouped by sbt_idx), so one
-      // sample names the per-yield-type counter.
       for (uint32_t t = 0; t < VX_CFG_NUM_THREADS; ++t) {
-        if (!(cb_mask & (1u << t))) continue;
+        if (!(cb_mask & (uint64_t(1) << t))) continue;
         switch (rsp.cb_type[t]) {
           case VX_RT_CB_TYPE_ANYHIT: ++perf_.ahs_callbacks;  break;
           case VX_RT_CB_TYPE_PROC:   ++perf_.is_callbacks;   break;
@@ -195,7 +193,6 @@ public:
           case VX_RT_CB_TYPE_MISS:   ++perf_.miss_callbacks; break;
           default:                                            break;
         }
-        break;
       }
       DT(3, "rtu-core reform cb_yield: warp=" << anchor_warp
             << ", sbt=" << anchor_sbt
@@ -255,7 +252,7 @@ public:
     const auto& p = perf_stats_;
     std::fprintf(stderr,
         "[rtu-stats] slots=%u ctx=%u merge=%u\n"
-        "[rtu-stats] rays_issued=%llu rays_hit=%llu rays_miss=%llu\n"
+        "[rtu-stats] traces=%llu rays=%llu rays_hit=%llu rays_miss=%llu\n"
         "[rtu-stats] mem_reads=%llu fetches_merged=%llu mshr_full=%llu\n"
         "[rtu-stats] bvh_nodes=%llu bvh_leaves=%llu box_tests=%llu tri_tests=%llu\n"
         "[rtu-stats] busy_ticks=%llu front_end_ticks=%llu mem_issue_ticks=%llu\n"
@@ -263,7 +260,8 @@ public:
         "[rtu-stats] cb_ahs=%llu cb_chs=%llu cb_miss=%llu cb_is=%llu reform=%llu\n",
         uint32_t(VX_CFG_RTU_NUM_SLOTS), uint32_t(VX_CFG_RTU_NUM_CTX),
         uint32_t(VX_CFG_RTU_MERGE_DEPTH),
-        (unsigned long long)p.rays_issued,
+        (unsigned long long)p.traces,
+        (unsigned long long)p.rays,
         (unsigned long long)p.rays_hit,
         (unsigned long long)p.rays_miss,
         (unsigned long long)p.mem_reads,
@@ -291,7 +289,8 @@ public:
     for (auto& cx : contexts_) cx = Context{};
     mem_engine_.reset();
     reform_.reset();
-    perf_stats_ = RtuCore::PerfStats();
+    // perf_stats_ survives: the MPM counters run from device reset, and every
+    // kernel launch re-enters reset().
     last_signature_ = 0;
     rr_exec_ = 0;
     step_cycles_left_   = 0;
@@ -343,7 +342,7 @@ public:
       uint32_t first_active = uint32_t(-1);
       s.lanes = {};
       for (uint32_t t = 0; t < VX_CFG_NUM_THREADS; ++t) {
-        if (s.req.tmask_bits & (1u << t)) {
+        if (s.req.tmask_bits & (uint64_t(1) << t)) {
           s.lanes[t].active = true;
           s.lanes[t].walk_needed = true;
           if (first_active == uint32_t(-1)) first_active = t;
@@ -359,7 +358,8 @@ public:
       }
       if (raylog::enabled()) raylog::on_accept(this, idx, s.req);
       ch.pop();
-      ++perf_stats_.rays_issued;
+      ++perf_stats_.traces;
+      perf_stats_.rays += __builtin_popcount(s.req.tmask_bits);
       DT(3, "rtu-core accept: tag=" << s.req.tag << ", slot=" << idx);
       rr_req_ = (cid + 1) % chs.size();
       return;
@@ -487,14 +487,14 @@ public:
   }
 
   void bind_context(uint32_t ci, uint32_t slot, uint32_t lane,
-                    uint32_t scene_root) {
+                    uint64_t scene_root) {
     Context& cx = contexts_[ci];
     cx = Context{};
     cx.valid = true;
     cx.slot  = slot;
     cx.lane  = lane;
-    cx.base_line = uint64_t(scene_root) & kRtuLineMask;
-    cx.byte_off  = uint32_t(uint64_t(scene_root) - cx.base_line);
+    cx.base_line = scene_root & kRtuLineMask;
+    cx.byte_off  = uint32_t(scene_root - cx.base_line);
     // The ray opens on the reciprocal (1/dir) setup and the scene-header fetch,
     // which cost front-end states like any other step, then drain the reciprocal
     // pipeline before the first node can be tested.
@@ -569,13 +569,12 @@ public:
                   + inst   * kRtuImageStatesPerInst;
     // Behind the last test fed, the PE pipeline drains while the context is
     // PARKED — box and tri results both carry their context id, so waiting for
-    // one costs the shared front end nothing. A trail restart re-descends every
-    // subtree the short stack had to evict.
+    // one costs the shared front end nothing. A trail restart's re-descent is
+    // already in the node and box counts above.
     uint32_t lat = 0;
     if (box) lat = std::max(lat, BoxPe::pipe_depth());
     if (tri) lat = std::max(lat, TriPe::pipe_depth());
     lat += kRtuXformLatency * inst;
-    lat += VX_CFG_RTU_STACK_DEPTH * restart;
     cx.pe_lat = lat;
     perf_stats_.walker_cycles_total += cx.fsm_states * kRtuPhasesPerStep
                                      + cx.img_states * kRtuPhasesImageAdd + lat;
@@ -723,8 +722,18 @@ public:
 
   void sample_occupancy() {
     uint32_t slots_used = 0;
+    bool busy = false;
     for (uint32_t i = 0; i < pool_.size(); ++i) {
-      if (pool_.at(i).in_use) ++slots_used;
+      const Slot& s = pool_.at(i);
+      if (s.in_use) ++slots_used;
+      // A slot is reserved before its rays arrive and stays emitted until the
+      // warp consumes its record; it holds no trace in either state.
+      if (s.in_use && s.state != SlotState::RESERVED && s.state != SlotState::EMITTED) {
+        busy = true;
+      }
+    }
+    if (busy) {
+      ++perf_stats_.rtu_busy_ticks;
     }
     uint32_t bound = 0, active = 0;
     for (const auto& cx : contexts_) {
@@ -738,7 +747,6 @@ public:
     perf_stats_.slot_busy_ticks  += slots_used;
     perf_stats_.ctx_bound_ticks  += bound;
     perf_stats_.ctx_active_ticks += active;
-    if (slots_used != 0) ++perf_stats_.rtu_busy_ticks;
   }
 
   const RtuCore::PerfStats& perf_stats() const { return perf_stats_; }

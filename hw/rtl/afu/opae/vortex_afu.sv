@@ -356,6 +356,9 @@ module vortex_afu import ccip_if_pkg::*; import local_mem_cfg_pkg::*; import VX_
         .axil_s     (cp_axil),
         .axi_host   (cp_axi_host),
         .axi_dev    (cp_axi_dev),
+        // CCI-P has no AXI host port, so there are no drain counters to report.
+        .dbg_host_w_counts ('0),
+        .dbg_host_r_counts ('0),
         .gpu_if     (cp_gpu_if),
         .irq        (cp_interrupt)
     );
@@ -736,6 +739,19 @@ module vortex_afu import ccip_if_pkg::*; import local_mem_cfg_pkg::*; import VX_
         .dcr_req_data   (vx_dcr_req_data),
         .dcr_rsp_valid  (vx_dcr_rsp_valid),
         .dcr_rsp_data   (vx_dcr_rsp_data),
+
+        .cp_mem_req_valid   (1'b0),
+        .cp_mem_req_rw      (1'b0),
+        .cp_mem_req_noalloc (1'b0),
+        .cp_mem_req_addr    ('0),
+        .cp_mem_req_data    ('0),
+        .cp_mem_req_byteen  ('0),
+        .cp_mem_req_tag     ('0),
+        `UNUSED_PIN (cp_mem_req_ready),
+        `UNUSED_PIN (cp_mem_rsp_valid),
+        `UNUSED_PIN (cp_mem_rsp_data),
+        `UNUSED_PIN (cp_mem_rsp_tag),
+        .cp_mem_rsp_ready   (1'b1),
 
         .start          (vx_start),
         .busy           (vx_busy)

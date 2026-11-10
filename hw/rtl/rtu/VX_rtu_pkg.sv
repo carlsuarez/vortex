@@ -263,21 +263,22 @@ package VX_rtu_pkg;
     //
     //   hit attrs  [RES_BASE, +RES_HIT)   written by every response
     //   candidate  [RES_BASE, +RES_CAND)  + object ray, cb_type, sbt, handle
-    //   payload     PAYLOAD_SLOT          written once, at arm (warp-uniform)
+    //   payload     PAYLOAD_SLOT(+1)      XLEN/32 words, written per record (warp-uniform)
     //   hit attr    ATTR_SLOT             the IS shader's hitAttribute, on commit
     //   status      STATUS_SLOT           written LAST
     //
     // Status is last by design: writing it is what completes the warp's parked
     // WAIT, so every slot the warp may then read must already be in place.
     // ─────────────────────────────────────────────────────────────────
-    localparam RTU_RAY_BEATS    = 8;   // origin[3], dir[3], t_min, t_max
-    localparam RTU_RES_BASE     = `VX_RT_HIT_T;
-    localparam RTU_RES_HIT      = 7;   // hit_t, hit_u, hit_v, prim, instance, geometry, custom
-    localparam RTU_RES_CAND     = 16;  // + object ray (6), cb_type, cb_sbt_idx, cb_handle
-    localparam RTU_STATUS_SLOT  = `VX_RT_STATUS;
-    localparam RTU_PAYLOAD_SLOT = `VX_RT_PAYLOAD_PTR_LO;
-    localparam RTU_ATTR_SLOT    = `VX_RT_HIT_ATTR_0;
-    localparam RTU_IDX_BITS     = `CLOG2(RTU_RES_CAND + 1);
+    localparam RTU_RAY_BEATS     = 8;   // origin[3], dir[3], t_min, t_max
+    localparam RTU_RES_BASE      = `VX_RT_HIT_T;
+    localparam RTU_RES_HIT       = 7;   // hit_t, hit_u, hit_v, prim, instance, geometry, custom
+    localparam RTU_RES_CAND      = 16;  // + object ray (6), cb_type, cb_sbt_idx, cb_handle
+    localparam RTU_STATUS_SLOT   = `VX_RT_STATUS;
+    localparam RTU_PAYLOAD_SLOT  = `VX_RT_PAYLOAD_PTR_LO;
+    localparam RTU_PAYLOAD_WORDS = `VX_CFG_XLEN / 32;
+    localparam RTU_ATTR_SLOT     = `VX_RT_HIT_ATTR_0;
+    localparam RTU_IDX_BITS      = `CLOG2(RTU_RES_CAND + 1);
 
     // ─────────────────────────────────────────────────────────────────
     // Window store — the per-slot result record, one NUM_LANES*32 row per word,
@@ -301,6 +302,13 @@ package VX_rtu_pkg;
     localparam RTU_WS_YLD_OBJ   = 19;  // instanced candidate's object ray: o.xyz, d.xyz (19..24)
     localparam RTU_WS_WORDS     = 32;  // rows per slot (power of two for addressing)
     localparam RTU_WS_WORD_BITS = `CLOG2(RTU_WS_WORDS);
+
+    // Per-cycle traversal events the scheduler reports for the performance
+    // counters: strobes only, the counting lives in the core.
+    typedef struct packed {
+        logic box_test;   // a ray/AABB test issued
+        logic tri_test;   // a ray/triangle test issued
+    } rtu_sched_events_t;
 
 `IGNORE_UNUSED_END
 

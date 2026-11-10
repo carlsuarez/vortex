@@ -14,6 +14,7 @@
 #include <vortex.h>
 #include <common.h>
 #include <util.h>
+#include <algorithm>
 #include <cassert>
 #include <cstdlib>
 #include <cstring>
@@ -31,6 +32,12 @@ uint32_t pte_flags_from_access(uint32_t access_flags) {
   if (access_flags & VX_MEM_WRITE)
     pte |= PTE_W;
   return pte;
+}
+
+// The OM aperture is decoded by address ahead of translation (the LSU steers
+// it to the OM unit), so a randomized VA must never land in it.
+bool overlaps_om_aperture(uint64_t va, uint64_t size) {
+  return va < uint64_t(VX_MEM_OM_END_ADDR) && (va + size) > uint64_t(VX_MEM_OM_BASE_ADDR);
 }
 
 // Ceil-log2 — used for the per-level VPN field width.
@@ -58,6 +65,12 @@ VMManager::VMManager(DeviceMemIO* dev_io)
   if (randomize_va_) {
     std::cout << "[VM] Virtual address randomization ENABLED (seed=0x"
               << std::hex << seed << std::dec << ")" << std::endl;
+  }
+
+  const char* megapage_env = std::getenv("VORTEX_VM_MEGAPAGE_HEAP");
+  megapage_heap_ = (megapage_env != nullptr && std::atoi(megapage_env) != 0);
+  if (megapage_heap_) {
+    std::cout << "[VM] Heap mapped with superpages" << std::endl;
   }
 }
 
@@ -114,6 +127,22 @@ int VMManager::init() {
                                    GLOBAL_MEM_SIZE - VX_MEM_PAGE_TABLE_BASE_ADDR), {
       return err;
     });
+    if (megapage_heap_) {
+      // Superpages over the whole heap, as GPU drivers back allocations with
+      // 2 MB pages: a buffer keeps its identity VA and no longer costs a TLB
+      // entry per 4 KB. Per-buffer access flags are not enforced in this mode.
+      if (randomize_va_) {
+        std::cerr << "[VM] VORTEX_VM_MEGAPAGE_HEAP and VORTEX_RANDOMIZE_VA are mutually exclusive" << std::endl;
+        return -1;
+      }
+      uint64_t heap_end = VX_MEM_PAGE_TABLE_BASE_ADDR;
+#if VX_VM_ADDR_MODE == SV32
+      heap_end = std::min<uint64_t>(heap_end, 0x100000000ULL);
+#endif
+      CHECK_ERR(install_identity_map(ALLOC_BASE_ADDR, heap_end - ALLOC_BASE_ADDR), {
+        return err;
+      });
+    }
   }
   // install_identity_map() already flushed; an extra flush here is a
   // cheap no-op if nothing else dirtied the shadow.
@@ -152,7 +181,7 @@ uint64_t VMManager::map_p2v(uint64_t ppn, uint32_t flags) {
       uint64_t random_page_offset = dist(rng_);
       uint64_t candidate_va = va_range_start + (random_page_offset << VX_VM_PAGE_LOG2_SIZE);
 
-      bool in_use = false;
+      bool in_use = overlaps_om_aperture(candidate_va, VX_VM_PAGE_SIZE);
       for (const auto& mapping : addr_mapping) {
         if (mapping.second == (candidate_va >> VX_VM_PAGE_LOG2_SIZE)) {
           in_use = true;
@@ -183,6 +212,9 @@ uint64_t VMManager::map_p2v(uint64_t ppn, uint32_t flags) {
 int VMManager::phy_to_virt_map(uint64_t size, uint64_t* dev_pAddr, uint32_t flags) {
   if (!need_trans(*dev_pAddr))
     return 0;
+  if (megapage_heap_ && *dev_pAddr >= ALLOC_BASE_ADDR && *dev_pAddr < VX_MEM_PAGE_TABLE_BASE_ADDR) {
+    return 0;  // identity-mapped by init()
+  }
 
   uint64_t init_pAddr = *dev_pAddr;
   // Round up: a sub-page allocation still needs one PTE. A plain
@@ -213,7 +245,8 @@ int VMManager::phy_to_virt_map(uint64_t size, uint64_t* dev_pAddr, uint32_t flag
         uint64_t random_page_offset = dist(rng_);
         uint64_t candidate_va = va_range_start + (random_page_offset << VX_VM_PAGE_LOG2_SIZE);
 
-        bool range_available = true;
+        bool range_available =
+            !overlaps_om_aperture(candidate_va, num_pages << VX_VM_PAGE_LOG2_SIZE);
         for (uint64_t i = 0; i < num_pages && range_available; ++i) {
           uint64_t test_vpn = (candidate_va >> VX_VM_PAGE_LOG2_SIZE) + i;
           for (const auto& mapping : addr_mapping) {
@@ -332,7 +365,17 @@ int VMManager::install_identity_map(uint64_t addr, uint64_t size) {
   constexpr uint32_t IDENTITY_PTE_FLAGS =
       PTE_V | PTE_R | PTE_W | PTE_X | PTE_U | PTE_A | PTE_D;
 
-  (void)virtual_mem_->reserve(addr, size);
+  // A range inside one already mapped, as the kernel image is inside the
+  // page-table and stack region init() maps, holds its VAs already.
+  bool reserved = false;
+  for (auto [start, end] : identity_ranges_) {
+    if (addr >= start && addr + size <= end) {
+      reserved = true;
+      break;
+    }
+  }
+  if (!reserved && virtual_mem_->reserve(addr, size) == 0)
+    identity_ranges_.emplace_back(addr, addr + size);
 
   uint64_t cur = addr;
   uint64_t end = addr + size;

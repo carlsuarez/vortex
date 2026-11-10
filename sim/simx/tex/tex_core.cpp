@@ -96,7 +96,7 @@ public:
 
   void reset() {
     cycle_ = 0;
-    perf_stats_ = TexCore::PerfStats();
+    // perf_stats_ survives: the MPM counters run from device reset.
     for (auto& s : slots_) {
       s.in_use = false;
       s.pending_lines = 0;
@@ -186,7 +186,7 @@ private:
     const bool mip_linear = sampler_.mip_linear(s.req.stage);
     for (uint32_t t = 0; t < VX_CFG_NUM_THREADS; ++t) {
       LaneState& l = s.lanes[t];
-      if (!(s.req.tmask_bits & (1u << t))) {
+      if (!(s.req.tmask_bits & (uint64_t(1) << t))) {
         l.active = false;
         continue;
       }
@@ -383,7 +383,7 @@ private:
     rsp.trace    = s.req.trace;
     rsp.block_id = s.req.block_id;
     for (uint32_t t = 0; t < VX_CFG_NUM_THREADS; ++t) {
-      rsp.texels[t] = (s.req.tmask_bits & (1u << t)) ? s.lanes[t].filtered : 0u;
+      rsp.texels[t] = (s.req.tmask_bits & (uint64_t(1) << t)) ? s.lanes[t].filtered : 0u;
     }
     rsp_ch.send(rsp);
     DT(4, simobject_->name() << " complete: uuid=" << s.req.uuid

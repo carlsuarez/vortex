@@ -7,8 +7,8 @@ SRC_DIR := $(VORTEX_HOME)/sim/xrtsim
 AFU_DIR := $(RTL_DIR)/afu/xrt
 AFU_COMMON_DIR := $(RTL_DIR)/afu/common
 
-CXXFLAGS += -std=c++17 -Wall -Wextra -Wfatal-errors -Wno-array-bounds
-CXXFLAGS += -fPIC -Wno-maybe-uninitialized
+CXXFLAGS += -std=c++17 -Wall -Wextra -Wfatal-errors -Werror
+CXXFLAGS += -fPIC
 # GCC 13 turns the generated per-word copy of a wide signal into a memcpy and
 # inlines it with aligned 16-byte stores, faulting on a destination that is only
 # 8-byte aligned in the root class (NUM_THREADS=16 + RTU crashes in reset).
@@ -22,7 +22,7 @@ CXXFLAGS += -DVX_CFG_XLEN=$(XLEN) -DVX_CFG_XLEN_$(XLEN)
 CXXFLAGS += $(CONFIGS)
 
 LDFLAGS += -shared $(THIRD_PARTY_DIR)/softfloat/build/Linux-x86_64-GCC/softfloat.a
-LDFLAGS += -Wl,-rpath,$(THIRD_PARTY_DIR)/ramulator -L$(THIRD_PARTY_DIR)/ramulator -lramulator -pthread
+LDFLAGS += -Wl,-rpath,$(THIRD_PARTY_DIR)/ramulator -L$(THIRD_PARTY_DIR)/ramulator -lramulator -Wl,-rpath,$(THIRD_PARTY_DIR)/ramulator_ext -L$(THIRD_PARTY_DIR)/ramulator_ext -Wl,--push-state,--no-as-needed -lramulator-vortex -Wl,--pop-state -pthread
 
 # control RTL debug tracing states
 DBG_TRACE_FLAGS += -DDBG_TRACE_PIPELINE
@@ -130,6 +130,11 @@ ifneq (,$(filter -DVX_CFG_EXT_RTU_ENABLE, $(XCONFIGS)))
 	RTL_INCLUDE += -I$(RTL_DIR)/rtu
 endif
 
+# Add MUFU extension sources
+ifneq (,$(filter -DVX_CFG_EXT_MUFU_ENABLE, $(XCONFIGS)))
+	RTL_INCLUDE += -I$(RTL_DIR)/mufu
+endif
+
 RTL_PKGS += $(RTL_DIR)/VX_trace_pkg.sv
 
 # Command Processor: declare the package only. Interfaces live in
@@ -138,10 +143,24 @@ RTL_PKGS += $(RTL_DIR)/VX_trace_pkg.sv
 # Verilator from the -I path above.
 RTL_PKGS += $(RTL_DIR)/cp/VX_cp_pkg.sv
 
+# One AXI memory master per GPU memory port. The platform top must declare
+# its ports literally, so resolve the count from the elaborated configuration.
+AFU_MEM_PORTS := $(shell $(SCRIPT_DIR)/afu_mem_ports.sh -c $(DESTDIR)/.afu_mem_ports $(VERILATOR_PATH)/bin/verilator \
+                   -DVX_CFG_XLEN=$(XLEN) -DVX_CFG_XLEN_$(XLEN) \
+                   $(CONFIGS) $(filter -DVX_CFG_TCU_TYPE_% -DVX_CFG_FPU_TYPE_%,$(XCONFIGS)) \
+                   $(RTL_INCLUDE) $(RTL_PKGS))
+ifeq ($(AFU_MEM_PORTS),)
+$(error cannot resolve the AFU memory port count for this configuration)
+endif
+CXXFLAGS += -DAFU_MEM_PORTS=$(AFU_MEM_PORTS)
+
 TOP = vortex_afu_shim
 
 VL_FLAGS += --language 1800-2012 --assert -Wall -Wpedantic
-VL_FLAGS += -Wno-DECLFILENAME -Wno-REDEFMACRO -Wno-fatal
+VL_FLAGS += -Wno-DECLFILENAME -Wno-REDEFMACRO
+# Verilator counts a zero fill of a warp-wide datapath as a replication, and a
+# 64-thread warp at XLEN 64 passes its default limit of 8192 bits.
+VL_FLAGS += --replication-limit 65536
 VL_FLAGS += --x-initial unique --x-assign unique
 VL_FLAGS += verilator.vlt
 VL_FLAGS += -DVX_CFG_XLEN=$(XLEN) -DVX_CFG_XLEN_$(XLEN)
@@ -152,6 +171,7 @@ VL_FLAGS += -DVX_CFG_XLEN=$(XLEN) -DVX_CFG_XLEN_$(XLEN)
 # VX_CFG_TCU_TYPE_DPI) unmatched. Add just the enum companions gen_config
 # resolves, so a CONFIGS enum override actually selects its RTL implementation.
 VL_FLAGS += $(CONFIGS) $(filter -DVX_CFG_TCU_TYPE_% -DVX_CFG_FPU_TYPE_%,$(XCONFIGS))
+VL_FLAGS += -DAFU_MEM_PORTS=$(AFU_MEM_PORTS)
 VL_FLAGS += $(RTL_INCLUDE)
 VL_FLAGS += $(RTL_PKGS)
 
@@ -216,8 +236,10 @@ $(DESTDIR)/vortex.json: $(CONFIG_FILE)
 $(DESTDIR)/scope.json: $(DESTDIR)/vortex.json
 	$(SCRIPT_DIR)/scope.py $^ -o $@
 
+# verilator --build runs its own make (parallelized by -j in VL_FLAGS) that
+# cannot reach this make's jobserver, so it gets a clean MAKEFLAGS.
 $(DESTDIR)/$(PROJECT): $(SRCS) $(SCOPE_JSON) $(CONFIG_FILE) $(RTL_SRCS)
-	$(VERILATOR_PATH)/bin/verilator --build --exe $(VL_FLAGS) --cc $(TOP) --top-module $(TOP) $(SRCS) -CFLAGS '$(CXXFLAGS)' -LDFLAGS '$(LDFLAGS)' --Mdir $@.obj_dir -o $@
+	MAKEFLAGS= $(VERILATOR_PATH)/bin/verilator --build --exe $(VL_FLAGS) --cc $(TOP) --top-module $(TOP) $(SRCS) -CFLAGS '$(CXXFLAGS)' -LDFLAGS '$(LDFLAGS)' --Mdir $@.obj_dir -o $@
 
 # updates the timestamp when flags changed.
 $(CONFIG_FILE): force

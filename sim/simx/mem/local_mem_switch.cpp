@@ -20,11 +20,11 @@ LocalMemSwitch::LocalMemSwitch(
   const char* name,
   uint32_t delay
 ) : SimObject<LocalMemSwitch>(ctx, name)
-  // Single-entry ingress: the switch accepts a new request only as its
-  // current one drains, so upstream issue feels downstream cadence
-  // immediately instead of running ahead into queue slack.
+  // The split is combinational: a request handed over is routed into the
+  // output buffers in the same cycle, and ReqIn holds nothing across cycles.
   , ReqIn(this, 1)
-  , RspOut(this)
+  // the response arbiter's one-entry output buffer
+  , RspOut(this, 1)
   , ReqOutLmem(this)
   , RspInLmem(this)
   , ReqOutDC(this)
@@ -88,11 +88,13 @@ void LocalMemSwitch::on_tick() {
           out_lmem_req.addrs.at(i)  = in_req.addrs.at(i);
           out_lmem_req.data.at(i)   = in_req.data.at(i);
           out_lmem_req.byteen.at(i) = in_req.byteen.at(i);
+          out_lmem_req.amo_cmp.at(i) = in_req.amo_cmp.at(i);
         } else {
           out_dc_req.mask.set(i);
           out_dc_req.addrs.at(i)  = in_req.addrs.at(i);
           out_dc_req.data.at(i)   = in_req.data.at(i);
           out_dc_req.byteen.at(i) = in_req.byteen.at(i);
+          out_dc_req.amo_cmp.at(i) = in_req.amo_cmp.at(i);
         }
       }
     }

@@ -5,7 +5,7 @@
 
 namespace vt = vortex::tensor;
 using ctx = vt::wgmma_context<VX_CFG_NUM_THREADS, vt::ITYPE, vt::OTYPE,
-                              false, WGMMA_NRC>;
+                              false, WGMMA_NRC, vt::ldst_matrix_enabled>;
 
 __kernel void kernel_main(kernel_arg_t* __UNIFORM__ arg) {
   static_assert(sizeof(ctx::input_t) == 1, "MX WGMMA inputs use byte storage");
@@ -19,15 +19,15 @@ __kernel void kernel_main(kernel_arg_t* __UNIFORM__ arg) {
   auto pBTensorScale = reinterpret_cast<const float *>(arg->B_tensor_scale_addr);
 #endif
 
-  uint32_t N = arg->N;
-  uint32_t K = arg->K;
+  size_t N = arg->N;
+  size_t K = arg->K;
   uint32_t tid = threadIdx.x;
   uint32_t num_threads = blockDim.x;
   uint32_t warp_rank = tid / VX_CFG_NUM_THREADS;
   uint32_t num_warps = num_threads / VX_CFG_NUM_THREADS;
   uint32_t cta_m = num_warps * ctx::xtileM;
-  uint32_t tile_row = blockIdx.y * cta_m;
-  uint32_t tile_col = blockIdx.x * ctx::xtileN;
+  size_t tile_row = blockIdx.y * cta_m;
+  size_t tile_col = blockIdx.x * ctx::xtileN;
   uint32_t num_k_tiles = K / ctx::tileK;
 
   auto A_smem = reinterpret_cast<uint8_t *>(__local_mem());
@@ -37,18 +37,25 @@ __kernel void kernel_main(kernel_arg_t* __UNIFORM__ arg) {
   ctx::fragment_acc fragC;
   ctx::fill_fragment(fragC, 0);
 
-  for (uint32_t k = 0; k < K; k += ctx::tileK) {
+#if defined(WGMMA_RS) && (WGMMA_NRC <= 16)
+  size_t a_lane_off = ctx::lane_offset<ctx::fragment_a>(ctx::tileK);
+#endif
+
+#if KUNROLL > 1
+#pragma unroll KUNROLL
+#endif
+  for (size_t k = 0; k < K; k += ctx::tileK) {
     uint32_t k_tile = k / ctx::tileK;
     uint32_t a_bytes = cta_m * ctx::tileK;
-    for (uint32_t idx = tid; idx < a_bytes; idx += num_threads) {
-      uint32_t row = idx / ctx::tileK;
-      uint32_t col = idx % ctx::tileK;
+    for (size_t idx = tid; idx < a_bytes; idx += num_threads) {
+      size_t row = idx / ctx::tileK;
+      size_t col = idx % ctx::tileK;
       A_smem[idx] = pA[(tile_row + row) * K + k + col];
     }
     uint32_t b_bytes = ctx::xtileN * ctx::tileK;
-    for (uint32_t idx = tid; idx < b_bytes; idx += num_threads) {
-      uint32_t col = idx / ctx::tileK;
-      uint32_t k_byte = idx % ctx::tileK;
+    for (size_t idx = tid; idx < b_bytes; idx += num_threads) {
+      size_t col = idx / ctx::tileK;
+      size_t k_byte = idx % ctx::tileK;
       B_smem[idx] = pB[(tile_col + col) * K + k + k_byte];
     }
     __syncthreads();
@@ -62,7 +69,7 @@ __kernel void kernel_main(kernel_arg_t* __UNIFORM__ arg) {
     auto A_warp = A_smem + warp_rank * ctx::xtileM * ctx::tileK;
     auto desc_b = vt::vx_make_smem_desc(B_smem, ctx::tileK);
 #if defined(WGMMA_RS) && (WGMMA_NRC <= 16)
-    ctx::load_matrix_sync(fragA, A_warp, ctx::tileK);
+    ctx::load_matrix_sync(fragA, A_warp, ctx::tileK, a_lane_off);
     ctx::wgmma_sync(fragC, fragA, desc_b, fragC);
 #else
     auto desc_a = vt::vx_make_smem_desc(A_warp, ctx::tileK);

@@ -6,15 +6,15 @@ void kernel_body(kernel_arg_t *arg) {
   auto B_ptr = reinterpret_cast<TYPE*>(arg->B_addr);
   auto C_ptr = reinterpret_cast<TYPE*>(arg->C_addr);
 
-  auto size      = arg->size;
-  auto tile_size = arg->tile_size;
-  auto chunk_k   = arg->chunk_k;
+  size_t size      = arg->size;
+  size_t tile_size = arg->tile_size;
+  size_t chunk_k   = arg->chunk_k;
 
   // Global and local thread coordinates.
-  auto g_row = blockIdx.x * blockDim.x + threadIdx.x;
-  auto g_col = blockIdx.y * blockDim.y + threadIdx.y;
-  auto l_row = threadIdx.x;
-  auto l_col = threadIdx.y;
+  size_t g_row = blockIdx.x * blockDim.x + threadIdx.x;
+  size_t g_col = blockIdx.y * blockDim.y + threadIdx.y;
+  size_t l_row = threadIdx.x;
+  size_t l_col = threadIdx.y;
 
   // Shared memory layout:
   //   local_A: [tile_size × chunk_k], row-major (row = l_row, col = k_local)
@@ -27,20 +27,51 @@ void kernel_body(kernel_arg_t *arg) {
 
   TYPE sum(0);
 
-  for (uint32_t k = 0; k < size; k += chunk_k) {
+  for (size_t k = 0; k < size; k += chunk_k) {
     // Cooperative load: each thread loads chunk_k/tile_size elements per tile.
     // Thread (l_row, l_col) loads columns l_col, l_col+tile_size, ... of its row.
-    for (uint32_t kk = l_col; kk < chunk_k; kk += tile_size) {
+    for (size_t kk = l_col; kk < chunk_k; kk += tile_size) {
       local_A[l_row * chunk_k + kk] = A_ptr[g_row * size + (k + kk)];
     }
-    for (uint32_t kk = l_row; kk < chunk_k; kk += tile_size) {
+    for (size_t kk = l_row; kk < chunk_k; kk += tile_size) {
       local_B[kk * tile_size + l_col] = B_ptr[(k + kk) * size + g_col];
     }
 
     __syncthreads();
 
-    for (uint32_t j = 0; j < chunk_k; ++j) {
-      sum += local_A[l_row * chunk_k + j] * local_B[j * tile_size + l_col];
+    const TYPE* a_row = &local_A[l_row * chunk_k];
+    size_t j = 0;
+    for (; j + 4 <= chunk_k; j += 4) {
+#ifdef VX_CFG_EXT_LDST_WIDE_ENABLE
+      static_assert(__is_same(TYPE, float), "the wide loads read float words");
+      // The compiler cannot move a load across the quad's asm volatile, so the
+      // order is written out. With 4 threads the quad conflicts 4 ways on the
+      // local-memory banks and B1 goes ahead of it too, so the second FMA does
+      // not wait on its uops; with 8 or more its uops are cheap and only B0
+      // goes first, so the FMA chain starts sooner.
+      TYPE b0 = local_B[j * tile_size + l_col];
+#if VX_CFG_NUM_THREADS < 8
+      TYPE b1 = local_B[(j + 1) * tile_size + l_col];
+#endif
+      vx_float4 a = vx_flw_q(&a_row[j]);
+      sum += a[0] * b0;
+#if VX_CFG_NUM_THREADS < 8
+      sum += a[1] * b1;
+#else
+      sum += a[1] * local_B[(j + 1) * tile_size + l_col];
+#endif
+      sum += a[2] * local_B[(j + 2) * tile_size + l_col];
+      sum += a[3] * local_B[(j + 3) * tile_size + l_col];
+#else
+      TYPE a[4] = {a_row[j], a_row[j + 1], a_row[j + 2], a_row[j + 3]};
+      sum += a[0] * local_B[j * tile_size + l_col];
+      sum += a[1] * local_B[(j + 1) * tile_size + l_col];
+      sum += a[2] * local_B[(j + 2) * tile_size + l_col];
+      sum += a[3] * local_B[(j + 3) * tile_size + l_col];
+#endif
+    }
+    for (; j < chunk_k; ++j) {
+      sum += a_row[j] * local_B[j * tile_size + l_col];
     }
 
     __syncthreads();

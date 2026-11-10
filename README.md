@@ -7,7 +7,7 @@
 Vortex is a full-stack open-source RISC-V GPGPU. Vortex supports multiple **backend drivers**, including our C++ simulator (simx), an RTL simulator, and physical Xilinx and Altera FPGAs-- all controlled by a single driver script. The chosen driver determines the corresponding code invoked to run Vortex. Generally, developers will prototype their intended design in simx, before completing going forward with an RTL implementation. Alternatively, you can get up and running by selecting a driver of your choice and running a demo program.
 
 ## Website
-Vortex news can be found on its [website](https://vortex.cc.gatech.edu/)
+Vortex news can be found on its [website](https://vortexgpgpu.github.io/index.html)
 
 ## Citation
 ```
@@ -81,7 +81,7 @@ The following dependencies will be fetched prebuilt by `toolchain_install.sh`.
 - [SoftFloat](https://github.com/ucb-bar/berkeley-softfloat-3.git)
 - [Ramulator](https://github.com/CMU-SAFARI/ramulator.git)
 - [Yosys](https://github.com/YosysHQ/yosys)
-- [Sv2v](https://github.com/zachjs/sv2v)
+- [CIRCT](https://github.com/llvm/circt) (Vortex's fork)
 - [Mesa](https://www.mesa3d.org/)
 - [chipStar](https://github.com/CHIP-Star/chipStar)
 ### Install Vortex codebase

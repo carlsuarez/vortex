@@ -9,7 +9,7 @@
 # synthesizes, so both gates measure the same modules and a divergence between
 # them is meaningful rather than an artefact of two DUT lists.
 
-DUTS := cache core tcu gfx tex raster om rtu dxa vm tensor top vortex
+DUTS := cache core lmem tcu gfx gfxvm tex raster om rtu dxa mufu vm tensor top vortex
 
 UNITTEST_DIR ?= $(VORTEX_HOME)/hw/unittest
 AFU_RTL_DIR  ?= $(VORTEX_HOME)/hw/rtl/afu
@@ -21,6 +21,12 @@ cache_CFG := -DVX_CFG_EXT_A_ENABLE
 core_TOP := VX_core_top
 core_INC := -I$(UNITTEST_DIR)/core
 core_CFG := -DVX_CFG_NUM_THREADS=16 -DVX_CFG_NUM_WARPS=16 -DVX_CFG_EXT_C_ENABLE -DVX_CFG_EXT_A_ENABLE
+
+# Warp-wide local memory at the configured core shape; its gate builds set the
+# shape, as the Xilinx lmem DUT's do.
+lmem_TOP := VX_lmem_unit_top
+lmem_INC := -I$(UNITTEST_DIR)/lmem_unit
+lmem_CFG :=
 
 tcu_TOP := VX_tcu_unit_top
 tcu_INC := -I$(UNITTEST_DIR)/tcu_unit
@@ -39,6 +45,11 @@ gfx_CFG := -DVX_CFG_EXT_TEX_ENABLE -DVX_CFG_EXT_RTU_ENABLE -DVX_CFG_EXT_RASTER_E
            -DVX_CFG_NUM_THREADS=16 -DVX_CFG_NUM_WARPS=16 -DVX_CFG_NUM_CORES=2 \
            -DVX_CFG_SOCKET_SIZE=2 -DVX_CFG_PLATFORM_MEMORY_NUM_BANKS=1 \
            -DVX_CFG_L2_ENABLE -DVX_CFG_L2_SIZE=262144
+
+# The graphics slice under VM, as the Xilinx catalog's gfxvm.
+gfxvm_TOP := VX_gfx_top
+gfxvm_INC := $(gfx_INC)
+gfxvm_CFG := $(gfx_CFG) -DVX_CFG_VM_ENABLE
 
 tex_TOP := VX_tex_core_top
 tex_INC := -I$(UNITTEST_DIR)/tex_core
@@ -59,6 +70,10 @@ rtu_CFG := -DVX_CFG_NUM_THREADS=16 -DVX_CFG_NUM_WARPS=16 -DVX_CFG_EXT_RTU_ENABLE
 dxa_TOP := VX_dxa_core_top
 dxa_INC := -I$(UNITTEST_DIR)/dxa_core
 dxa_CFG := -DVX_CFG_NUM_THREADS=16 -DVX_CFG_NUM_WARPS=16 -DVX_CFG_EXT_DXA_ENABLE
+
+mufu_TOP := VX_mufu_unit_top
+mufu_INC := -I$(UNITTEST_DIR)/mufu_unit
+mufu_CFG := -DVX_CFG_NUM_THREADS=16 -DVX_CFG_NUM_WARPS=16 -DVX_CFG_EXT_MUFU_ENABLE
 
 vm_TOP := VX_vm_top
 vm_INC := -I$(UNITTEST_DIR)/vm
@@ -83,7 +98,7 @@ tensor_CFG := -DVX_CFG_NUM_THREADS=16 -DVX_CFG_NUM_WARPS=16 -DVX_CFG_EXT_TCU_ENA
 # Multi-core system top behind the AFU control/memory wrapper, as in the Xilinx
 # catalog: 2 cores with atomics and virtual memory.
 top_TOP := VX_afu_wrap
-top_INC := -I$(VORTEX_HOME)/hw/rtl/cp -I$(AFU_RTL_DIR)/xrt -I$(AFU_RTL_DIR)/common
+top_INC := -I$(VORTEX_HOME)/hw/rtl/cp -I$(AFU_RTL_DIR)/common
 top_CFG := -DVX_CFG_NUM_THREADS=4 -DVX_CFG_NUM_WARPS=4 -DVX_CFG_NUM_CORES=2 \
            -DVX_CFG_EXT_A_ENABLE -DVX_CFG_VM_ENABLE -DVX_CFG_DCACHE_LATENCY=3
 

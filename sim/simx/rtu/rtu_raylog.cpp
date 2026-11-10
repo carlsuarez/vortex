@@ -79,7 +79,7 @@ public:
   void accept(const void* owner, uint32_t slot, const RtuReq& req) {
     cb_[{owner, slot}].fill(0);
     for (uint32_t t = 0; t < VX_CFG_NUM_THREADS; ++t) {
-      if (req.tmask_bits & (1u << t)) snapshot_scene(req.scene_root[t]);
+      if (req.tmask_bits & (uint64_t(1) << t)) snapshot_scene(req.scene_root[t]);
     }
   }
 
@@ -158,13 +158,13 @@ private:
   static constexpr uint64_t kInstTableSpan = 64 * 1024;
   static constexpr uint64_t kMaxSceneBytes = 1ull << 30;
 
-  void snapshot_scene(uint32_t root) {
+  void snapshot_scene(uint64_t root) {
     if (ram_ == nullptr || full() || !snapped_.insert(root).second) return;
     const RAM& ram = *ram_;
     uint32_t scene_bytes = 0;
     for (int i = 0; i < 4; ++i) scene_bytes |= uint32_t(ram[root + 8 + i]) << (8 * i);
     const uint64_t lo = (root > kInstTableSpan ? root - kInstTableSpan : 0) & kRtuLineMask;
-    const uint64_t hi = uint64_t(root) + std::min<uint64_t>(scene_bytes, kMaxSceneBytes);
+    const uint64_t hi = root + std::min<uint64_t>(scene_bytes, kMaxSceneBytes);
     uint64_t added = 0;
     for (uint64_t a = lo; a < hi; a += VX_CFG_MEM_BLOCK_SIZE) {
       if (image_.count(a)) continue;
@@ -184,12 +184,12 @@ private:
       std::fwrite(&r, sizeof(r), 1, fp_);
       ++added;
     }
-    std::fprintf(stderr, "[rtu-raylog] scene 0x%x: %u bytes, snapshot %llu lines\n",
-                 root, scene_bytes, (unsigned long long)added);
+    std::fprintf(stderr, "[rtu-raylog] scene 0x%llx: %u bytes, snapshot %llu lines\n",
+                 (unsigned long long)root, scene_bytes, (unsigned long long)added);
   }
 
   const RAM* ram_ = nullptr;
-  std::unordered_set<uint32_t> snapped_;
+  std::unordered_set<uint64_t> snapped_;
   FILE*      fp_ = nullptr;
   unsigned long long max_rays_ = 4ull << 20;
   unsigned long long every_    = 1;

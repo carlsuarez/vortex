@@ -69,7 +69,9 @@ private:
 // register file. Plain (non-SimObject) helper owned by SfuUnit.
 class RtuUnit {
 public:
-  RtuUnit(Core* core, SimChannel<RtuReq>& req_out, RtuWindow& window);
+  // bus_delay: extra cycles a request spends merging with other SFU blocks'
+  // requests onto the core's RTU bus.
+  RtuUnit(Core* core, SimChannel<RtuReq>& req_out, RtuWindow& window, uint32_t bus_delay = 0);
 
   // Async ray pool. process_wait either:
   //   - returns the trace with the per-lane status word written
@@ -156,6 +158,9 @@ public:
   // code reads the right payload before issuing CONTINUE.
   void apply_callback_payload(const RtuRsp& rsp);
 
+  // The payload pointer is XLEN wide; the window holds it as 32-bit words.
+  void stage_payload_ptr(RtuWindow::LaneRegs& lregs, uint32_t wid) const;
+
   // Representative slot of a candidate rsp (first active lane's cb_handle).
   static uint32_t candidate_slot(const RtuRsp& rsp);
 
@@ -184,6 +189,7 @@ private:
 
   Core*               core_;
   SimChannel<RtuReq>& req_out_;
+  uint32_t            bus_delay_;
   // Async ray pool. Borrowed from the Socket via set_rtu_core();
   // null until the Socket has wired it (TRACE/WAIT paths must NEVER
   // dereference rtu_core_ before that — but in practice the Socket
@@ -209,7 +215,7 @@ private:
   // CONTINUE also carries lanes that are merely PENDING (still traversing), and
   // those may have a candidate queued for a later batch, so their garbage action
   // must not be allowed to resolve it.
-  std::array<uint32_t, VX_CFG_NUM_WARPS>  last_cand_mask_{};
+  std::array<uint64_t, VX_CFG_NUM_WARPS>  last_cand_mask_{};
 
   // Per-warp cross-uop TRACE state. The ray NEVER enters the window: the burst
   // stages it here and hands it to RtuCore at the arm. The window is result
@@ -225,9 +231,9 @@ private:
              VX_CFG_NUM_WARPS>           trace_ray_;
   // Warp-uniform half of the ray, staged by the config uop: it rides the arm
   // doorbell in HW, so it is not a window write either.
-  std::array<std::array<uint32_t, VX_CFG_NUM_THREADS>,
+  std::array<std::array<uint64_t, VX_CFG_NUM_THREADS>,
              VX_CFG_NUM_WARPS>           trace_scene_;
-  std::array<uint32_t, VX_CFG_NUM_WARPS> trace_payload_{};
+  std::array<uint64_t, VX_CFG_NUM_WARPS> trace_payload_{};
   std::array<uint32_t, VX_CFG_NUM_WARPS> trace_flags_{};
   std::array<uint32_t, VX_CFG_NUM_WARPS> trace_cull_{};
   // The slot handle each lane's outstanding candidate came from, mirrored here

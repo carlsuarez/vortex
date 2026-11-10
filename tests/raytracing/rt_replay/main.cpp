@@ -63,6 +63,7 @@ void cleanup() {
   if (kernel)   vx_kernel_release(kernel);
   if (module_)  vx_module_release(module_);
   if (queue)    vx_queue_release(queue);
+  vx_device_dump_perf(device, stdout);
   vx_device_release(device);
   device = nullptr;
 }
@@ -164,9 +165,9 @@ bool matches(const RaylogRay& ref, const replay_result_t& got) {
 }
 
 void print_ray(FILE* fp, uint64_t idx, const RaylogRay& r, const replay_result_t& g, const char* cat) {
-  fprintf(fp, "%llu seq=%u cat=%s epoch=%u scene=0x%x flags=0x%x cull=0x%x"
+  fprintf(fp, "%llu seq=%u cat=%s epoch=%u scene=0x%llx flags=0x%x cull=0x%x"
               " o=(%a,%a,%a) d=(%a,%a,%a) tmin=%a tmax=%a\n",
-          (unsigned long long)idx, r.seq, cat, r.epoch, r.scene_root, r.ray_flags, r.cull_mask,
+          (unsigned long long)idx, r.seq, cat, r.epoch, (unsigned long long)r.scene_root, r.ray_flags, r.cull_mask,
           fbits(r.origin[0]), fbits(r.origin[1]), fbits(r.origin[2]),
           fbits(r.dir[0]), fbits(r.dir[1]), fbits(r.dir[2]),
           fbits(r.tmin), fbits(r.tmax));
@@ -338,7 +339,7 @@ int main(int argc, char** argv) {
 
     // Group by the warp-uniform trace config; pad each group to whole warps
     // with copies of its last ray (their results are dropped).
-    std::map<std::tuple<uint32_t, uint32_t, uint32_t>, std::vector<uint64_t>> groups;
+    std::map<std::tuple<uint64_t, uint32_t, uint32_t>, std::vector<uint64_t>> groups;
     for (size_t k = pos; k < end; ++k) {
       const RaylogRay& r = rays[sel[k]];
       groups[{r.scene_root, r.ray_flags & ~(VX_RT_FLAG_ENABLE_CHS | VX_RT_FLAG_ENABLE_MISS), r.cull_mask}].push_back(sel[k]);

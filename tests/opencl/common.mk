@@ -51,6 +51,7 @@ VX_CFLAGS  += -Xclang -target-feature -Xclang +xvortex
 VX_CFLAGS  += -Xclang -target-feature -Xclang +zicond
 VX_LDFLAGS += -fuse-ld=lld
 VX_CFLAGS  += -mllvm -disable-loop-idiom-all	# disable memset/memcpy loop replacement
+VX_CFLAGS  += -Wall -Wextra -Wfatal-errors -Werror
 VX_LDFLAGS += -Wl,-z,norelro
 #VX_CFLAGS += -mllvm -vortex-branch-divergence=0
 #VX_CFLAGS += -mllvm -debug -mllvm -print-after-all
@@ -59,10 +60,11 @@ VX_LDFLAGS += -Wl,-Bstatic,--gc-sections,-T$(VORTEX_HOME)/sw/kernel/scripts/link
 
 VX_BINTOOL += OBJCOPY=$(LLVM_PATH)/bin/llvm-objcopy $(VORTEX_HOME)/sw/kernel/scripts/vxbin.py
 
-CXXFLAGS += -std=c++17 -Wall -Wextra -Wfatal-errors
-CXXFLAGS += -Wno-deprecated-declarations -Wno-unused-parameter -Wno-narrowing
+CXXFLAGS += -std=c++17 -Wall -Wextra -Wfatal-errors -Werror
 CXXFLAGS += -pthread
 CXXFLAGS += -I$(POCL_PATH)/include
+# The tests are written against the OpenCL 1.2 host API.
+CXXFLAGS += -DCL_TARGET_OPENCL_VERSION=120
 CXXFLAGS += $(CONFIGS)
 
 POCL_CC_FLAGS += LLVM_PREFIX=$(LLVM_PATH) POCL_VORTEX_BINTOOL="$(VX_BINTOOL)" POCL_VORTEX_CFLAGS="$(VX_CFLAGS)" POCL_VORTEX_LDFLAGS="$(VX_LDFLAGS)"
@@ -99,8 +101,9 @@ all: $(PROJECT)
 %.cpp.o: $(SRC_DIR)/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
+# Host C sources share the C++ flags except the language standard.
 %.c.o: $(SRC_DIR)/%.c
-	$(CC) $(CXXFLAGS) -c $< -o $@
+	$(CC) $(filter-out -std=c++%,$(CXXFLAGS)) -c $< -o $@
 
 $(VORTEX_KN_PATH)/libvortex.a:
 	$(MAKE) -C $(VORTEX_KN_PATH)
@@ -147,6 +150,43 @@ else ifeq ($(TARGET), hw_emu)
 	SCOPE_JSON_PATH=$(FPGA_BIN_DIR)/scope.json XCL_EMULATION_MODE=$(TARGET) XRT_INI_PATH=$(VORTEX_RT_SRC)/xrt/xrt.ini EMCONFIG_PATH=$(FPGA_BIN_DIR) XRT_DEVICE_INDEX=$(XRT_DEVICE_INDEX) XCLBIN_PATH=$(FPGA_BIN_DIR)/vortex_afu.xclbin LD_LIBRARY_PATH=$(XILINX_XRT)/lib:$(OCL_ICD_LIB_DIR):$(POCL_PATH)/lib:$(VORTEX_RT_LIB):$(LLVM_PATH)/lib:$(LD_LIBRARY_PATH) $(POCL_CC_FLAGS) OCL_ICD_VENDORS=$(OCL_ICD_VENDORS) VORTEX_DRIVER=xrt ./$(PROJECT) $(OPTS)
 else
 	SCOPE_JSON_PATH=$(VORTEX_RT_LIB)/scope.json LD_LIBRARY_PATH=$(XILINX_XRT)/lib:$(OCL_ICD_LIB_DIR):$(POCL_PATH)/lib:$(VORTEX_RT_LIB):$(LLVM_PATH)/lib:$(LD_LIBRARY_PATH) $(POCL_CC_FLAGS) OCL_ICD_VENDORS=$(OCL_ICD_VENDORS) VORTEX_DRIVER=xrt ./$(PROJECT) $(OPTS)
+endif
+
+# FireSim takes the same targets as the card's native driver; the card and its
+# variables are decided in sw/runtime/firesim/card.mk (convention established
+# in tests/regression/common.mk).
+ifneq ($(filter run-firesim,$(MAKECMDGOALS)),)
+ifeq ($(origin TARGET),file)
+override TARGET :=
+endif
+include $(VORTEX_HOME)/sw/runtime/firesim/card.mk
+endif
+
+run-firesim: $(PROJECT) $(KERNEL_SRCS)
+	$(RUNTIME_ARGS) $(MAKE) -C $(VORTEX_RT_SRC)/firesim DESTDIR=$(VORTEX_RT_LIB) FIRESIM_CARD=$(FIRESIM_CARD) TARGET=$(TARGET)
+ifneq ($(filter $(TARGET),xrtsim avedsim),)
+	LD_LIBRARY_PATH=$(OCL_ICD_LIB_DIR):$(POCL_PATH)/lib:$(VORTEX_RT_LIB):$(LLVM_PATH)/lib:$(LD_LIBRARY_PATH) $(POCL_CC_FLAGS) OCL_ICD_VENDORS=$(OCL_ICD_VENDORS) VORTEX_DRIVER=firesim ./$(PROJECT) $(OPTS)
+else ifeq ($(FIRESIM_PLATFORM), aved)
+ifeq ($(TARGET), hw)
+	$(VORTEX_HOME)/ci/v80_preflight.sh
+endif
+	VRT_DEVICE_BDF=$(VRT_DEVICE_BDF) VRT_VBIN_PATH=$(FPGA_BIN_DIR)/firesim.vbin LD_LIBRARY_PATH=$(OCL_ICD_LIB_DIR):$(POCL_PATH)/lib:$(VORTEX_RT_LIB):$(LLVM_PATH)/lib:$(LD_LIBRARY_PATH) $(POCL_CC_FLAGS) OCL_ICD_VENDORS=$(OCL_ICD_VENDORS) VORTEX_DRIVER=firesim ./$(PROJECT) $(OPTS)
+else ifeq ($(TARGET), hw)
+	XCLBIN_PATH=$(FPGA_BIN_DIR)/firesim.xclbin LD_LIBRARY_PATH=$(XILINX_XRT)/lib:$(OCL_ICD_LIB_DIR):$(POCL_PATH)/lib:$(VORTEX_RT_LIB):$(LLVM_PATH)/lib:$(LD_LIBRARY_PATH) $(POCL_CC_FLAGS) OCL_ICD_VENDORS=$(OCL_ICD_VENDORS) VORTEX_DRIVER=firesim ./$(PROJECT) $(OPTS)
+else
+	XCL_EMULATION_MODE=$(TARGET) XRT_INI_PATH=$(VORTEX_RT_SRC)/firesim/xrt.ini EMCONFIG_PATH=$(FPGA_BIN_DIR) XCLBIN_PATH=$(FPGA_BIN_DIR)/firesim.xclbin LD_LIBRARY_PATH=$(XILINX_XRT)/lib:$(OCL_ICD_LIB_DIR):$(POCL_PATH)/lib:$(VORTEX_RT_LIB):$(LLVM_PATH)/lib:$(LD_LIBRARY_PATH) $(POCL_CC_FLAGS) OCL_ICD_VENDORS=$(OCL_ICD_VENDORS) VORTEX_DRIVER=firesim ./$(PROJECT) $(OPTS)
+endif
+
+# foldsim: TARGET=hw runs FPGA_BIN_DIR's foldsim.vbin (hw/syn/foldsim) on the V80;
+# any other TARGET, avedsim, simulates the same kernel in-process (convention
+# established in tests/regression/common.mk).
+run-foldsim: $(PROJECT) $(KERNEL_SRCS)
+	$(RUNTIME_ARGS) $(MAKE) -C $(VORTEX_RT_SRC)/foldsim DESTDIR=$(VORTEX_RT_LIB) TARGET=$(if $(filter hw,$(TARGET)),hw,avedsim)
+ifeq ($(TARGET), hw)
+	$(VORTEX_HOME)/ci/v80_preflight.sh
+	VRT_DEVICE_BDF=$(VRT_DEVICE_BDF) VRT_VBIN_PATH=$(FPGA_BIN_DIR)/foldsim.vbin LD_LIBRARY_PATH=$(OCL_ICD_LIB_DIR):$(POCL_PATH)/lib:$(VORTEX_RT_LIB):$(LLVM_PATH)/lib:$(LD_LIBRARY_PATH) $(POCL_CC_FLAGS) OCL_ICD_VENDORS=$(OCL_ICD_VENDORS) VORTEX_DRIVER=foldsim ./$(PROJECT) $(OPTS)
+else
+	LD_LIBRARY_PATH=$(OCL_ICD_LIB_DIR):$(POCL_PATH)/lib:$(VORTEX_RT_LIB):$(LLVM_PATH)/lib:$(LD_LIBRARY_PATH) $(POCL_CC_FLAGS) OCL_ICD_VENDORS=$(OCL_ICD_VENDORS) VORTEX_DRIVER=foldsim ./$(PROJECT) $(OPTS)
 endif
 
 .depend: $(SRCS)

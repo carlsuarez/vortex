@@ -17,7 +17,7 @@ CONFIG_FILE = $(DESTDIR)/simx_config.stamp
 SRC_DIR = $(VORTEX_HOME)/sim/simx
 
 CXXFLAGS += -std=c++17 -Wall -Wextra -Wfatal-errors -Werror
-CXXFLAGS += -fPIC -Wno-maybe-uninitialized
+CXXFLAGS += -fPIC
 CXXFLAGS += -I$(SRC_DIR) -I$(SRC_DIR)/dxa -I$(SRC_DIR)/tex -I$(SRC_DIR)/om -I$(SRC_DIR)/raster -I$(SRC_DIR)/rtu -I$(SRC_DIR)/kmu -I$(SRC_DIR)/mem -I$(SRC_DIR)/dtm -I$(SW_COMMON_DIR) -I$(SIM_COMMON_DIR) -I$(ROOT_DIR)/sw -I$(ROOT_DIR)/hw -I$(THIRD_PARTY_DIR)
 CXXFLAGS += -I$(THIRD_PARTY_DIR)/softfloat/source/include
 CXXFLAGS += -I$(THIRD_PARTY_DIR)/ramulator/ext/spdlog/include
@@ -27,13 +27,13 @@ CXXFLAGS += -DVX_CFG_XLEN=$(XLEN) -DVX_CFG_XLEN_$(XLEN)
 CXXFLAGS += $(CONFIGS)
 
 LDFLAGS += $(THIRD_PARTY_DIR)/softfloat/build/Linux-x86_64-GCC/softfloat.a
-LDFLAGS += -Wl,-rpath,$(THIRD_PARTY_DIR)/ramulator -L$(THIRD_PARTY_DIR)/ramulator -lramulator
+LDFLAGS += -Wl,-rpath,$(THIRD_PARTY_DIR)/ramulator -L$(THIRD_PARTY_DIR)/ramulator -lramulator -Wl,-rpath,$(THIRD_PARTY_DIR)/ramulator_ext -L$(THIRD_PARTY_DIR)/ramulator_ext -Wl,--push-state,--no-as-needed -lramulator-vortex -Wl,--pop-state
 
 XCONFIGS := $(shell python3 $(ROOT_DIR)/ci/gen_config.py --config=$(VORTEX_HOME)/VX_config.toml --cflags='$(CONFIGS) -DVX_CFG_XLEN=$(XLEN)')
 
 # Source files definition
 SRCS = $(SW_COMMON_DIR)/util.cpp $(SIM_COMMON_DIR)/mem.cpp $(SW_COMMON_DIR)/softfloat_ext.cpp $(SW_COMMON_DIR)/rvfloats.cpp $(SIM_COMMON_DIR)/dram_sim.cpp $(SIM_COMMON_DIR)/cmd_processor.cpp $(SIM_COMMON_DIR)/elf_loader.cpp $(SIM_COMMON_DIR)/host_monitor.cpp $(SIM_COMMON_DIR)/cout_drainer.cpp
-SRCS += $(SRC_DIR)/processor.cpp $(SRC_DIR)/cluster.cpp $(SRC_DIR)/socket.cpp $(SRC_DIR)/core.cpp $(SRC_DIR)/scheduler.cpp $(SRC_DIR)/cta_dispatcher.cpp $(SRC_DIR)/barrier_unit.cpp
+SRCS += $(SRC_DIR)/processor.cpp $(SRC_DIR)/cluster.cpp $(SRC_DIR)/socket.cpp $(SRC_DIR)/core.cpp $(SRC_DIR)/scheduler.cpp $(SRC_DIR)/cta_dispatcher.cpp $(SRC_DIR)/barrier_unit.cpp $(SRC_DIR)/gbar_unit.cpp
 SRCS += $(SRC_DIR)/kmu/kmu.cpp
 SRCS += $(SRC_DIR)/decode.cpp $(SRC_DIR)/decompressor.cpp $(SRC_DIR)/scoreboard.cpp $(SRC_DIR)/sequencer.cpp $(SRC_DIR)/opc_unit.cpp $(SRC_DIR)/dispatcher.cpp
 SRCS += $(SRC_DIR)/alu_unit.cpp $(SRC_DIR)/fpu_unit.cpp $(SRC_DIR)/lsu_unit.cpp $(SRC_DIR)/sfu_unit.cpp $(SRC_DIR)/wctl_unit.cpp $(SRC_DIR)/csr_unit.cpp
@@ -53,6 +53,12 @@ ifneq ($(filter -DVX_CFG_EXT_TCU_ENABLE, $(XCONFIGS)),)
 	CXXFLAGS += -I$(SRC_DIR)/tcu
 	SRCS += $(SRC_DIR)/tcu/tcu_unit.cpp
 	SRCS += $(SRC_DIR)/tcu/tcu_tbuf.cpp
+endif
+
+# Add MUFU extension sources
+ifneq ($(filter -DVX_CFG_EXT_MUFU_ENABLE, $(XCONFIGS)),)
+	SRCS += $(SRC_DIR)/mufu_unit.cpp
+	SRCS += $(SW_COMMON_DIR)/mufu.cpp
 endif
 
 # Add VM sources
