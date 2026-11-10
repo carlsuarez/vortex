@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# Run a command inside the Vortex container (created by docker/setup.sh).
+#   docker/vx                   interactive shell
+#   docker/vx make -s           any command
+#   docker/vx bash -c '...'     for pipes, &&, or sourcing configs.sh
+# It runs in the host's current directory, which has the same path in the container.
+# From the Vortex tree outside build/, the mounted folder's top level, or outside that
+# folder, it runs in build/.
+# CLAUDE.md's build and run variables pass through when set, e.g.
+#   CONFIGS="..." docker/vx ./ci/blackbox.sh ...
+set -euo pipefail
+
+REPO=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+WORKSPACE=$(dirname "$REPO")
+NAME=vortex-deca
+
+if ! docker container inspect "$NAME" >/dev/null 2>&1; then
+    echo "vx: container '$NAME' not found; run docker/setup.sh" >&2
+    exit 1
+fi
+if [ "$(docker container inspect -f '{{.State.Running}}' "$NAME")" != true ]; then
+    docker start "$NAME" >/dev/null
+fi
+
+dir=$REPO/build
+case "$PWD/" in
+    "$REPO/build/"*) dir=$PWD ;;
+    "$REPO/"* | "$WORKSPACE/") ;;
+    "$WORKSPACE/"*) dir=$PWD ;;
+esac
+
+opts=(-i -w "$dir")
+for v in CONFIGS LD_LIBRARY_PATH PKG_CONFIG_PATH VORTEX_DRIVER GGML_VORTEX_KERNEL GGML_VORTEX_ENGINE; do
+    [ -n "${!v+x}" ] && opts+=(-e "$v")
+done
+[ $# -eq 0 ] && set -- bash
+if [ -t 0 ] && [ -t 1 ]; then
+    exec docker exec -t "${opts[@]}" "$NAME" "$@"
+fi
+
+# Without a TTY, docker exec doesn't forward signals, so a killed vx would leave the
+# command running in the container. Tag it through its environment, which every child
+# inherits, and on INT/TERM/HUP send TERM to each container process carrying the tag.
+tag=$$.$RANDOM
+docker exec -e VX_TAG="$tag" "${opts[@]}" "$NAME" "$@" <&0 &
+pid=$!
+trap 'docker exec "$NAME" sh -c "grep -lzx VX_TAG=$tag /proc/[0-9]*/environ | cut -d/ -f3 | xargs -r kill" 2>/dev/null' INT TERM HUP
+rc=0; wait "$pid" || rc=$?
+while kill -0 "$pid" 2>/dev/null; do rc=0; wait "$pid" || rc=$?; done
+exit "$rc"
