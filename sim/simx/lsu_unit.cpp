@@ -459,10 +459,16 @@ void LsuUnit::process_response_step(uint32_t b) {
 			state.rsp_tracks.release(track_id);
 		}
 	}
+	uint32_t rsp_delay = 1;
+#ifdef VX_CFG_EXT_DCMP_ENABLE
+	if (entry.is_load && entry.lsu_args.dcmp) {
+		rsp_delay += VX_CFG_DCMP_LATENCY;
+	}
+#endif
 	if (is_final && entry.eop) {
 		trace->rsp_tracked = true;
 		trace->rsp_last = rsp_last;
-		output.send(trace, 1);
+		output.send(trace, rsp_delay);
 	} else {
 		// A non-final fragment still spends a commit-port slot: it drains
 		// as a writeback-less beat that carries no retirement, so a
@@ -474,7 +480,7 @@ void LsuUnit::process_response_step(uint32_t b) {
 		beat->eop = false;
 		beat->rsp_tracked = true;
 		beat->rsp_last = rsp_last;
-		output.send(beat, 1);
+		output.send(beat, rsp_delay);
 	}
 	pending_loads_ -= lsu_rsp.mask.count();
 	lsu_rsp_in.pop();

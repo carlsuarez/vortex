@@ -132,6 +132,8 @@ VX_CFG_NUM_LSU_BLOCKS = "expr: $VX_CFG_ISSUE_WIDTH"
 # Interleave the per-thread stacks by word, so a warp-wide access to one frame
 # slot fills a single line instead of one same-bank line per thread.
 VX_CFG_LSU_STACK_INTERLEAVE_ENABLE = true
+# DCMP.LD's decode pipeline (hw/rtl/core/VX_dcmp_decode.sv): LUT and fp32 product, then fp16 rounding.
+VX_CFG_DCMP_LATENCY = 2
 
 VX_CFG_LSU_LINE_SIZE = "expr: min($VX_CFG_NUM_LSU_LANES * ($VX_CFG_XLEN / 8), $VX_CFG_L1_LINE_SIZE)"
 VX_CFG_LSU_QUEUE_IN_SIZE = "expr: max(4, 2 * ($VX_CFG_SIMD_WIDTH // $VX_CFG_NUM_LSU_LANES))"
