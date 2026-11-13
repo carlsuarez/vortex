@@ -30,10 +30,34 @@ static const struct {
   {"q4_0", GGML_TYPE_Q4_0},
   {"iq4_nl", GGML_TYPE_IQ4_NL},
   {"mxfp4", GGML_TYPE_MXFP4},
+  {"q4_k", GGML_TYPE_Q4_K},
+  {"q3_k", GGML_TYPE_Q3_K},
 };
 
-// ggml's CPU path pairs the 32-weight formats with Q8_0 activations
-const ggml_type xtype = GGML_TYPE_Q8_0;
+// ggml's CPU path pairs the 32-weight formats with Q8_0 activations and the K-quants with
+// Q8_K (its vec_dot_type); parse_args picks it from the weight type
+ggml_type xtype = GGML_TYPE_Q8_0;
+
+// Q8_K is only a vec_dot_type, so ggml's type traits leave its from_float_ref and to_float
+// null. libggml-base still exports both; they're declared in the internal ggml-quants.h.
+extern "C" {
+void quantize_row_q8_K_ref(const float* x, void* y, int64_t k);
+void dequantize_row_q8_K(const void* x, float* y, int64_t k);
+}
+
+static void quantize_act(const float* x, void* y, int64_t k) {
+  if (xtype == GGML_TYPE_Q8_K)
+    quantize_row_q8_K_ref(x, y, k);
+  else
+    ggml_get_type_traits(xtype)->from_float_ref(x, y, k);
+}
+
+static void dequantize_act(const void* x, float* y, int64_t k) {
+  if (xtype == GGML_TYPE_Q8_K)
+    dequantize_row_q8_K(x, y, k);
+  else
+    ggml_get_type_traits(xtype)->to_float(x, y, k);
+}
 
 const char* kernel_file = "kernel.vxbin";
 std::string type = "q8_0";
@@ -49,6 +73,7 @@ vx_buffer_h w_qs_buffer = nullptr;
 vx_buffer_h w_d_buffer = nullptr;
 vx_buffer_h x_qs_buffer = nullptr;
 vx_buffer_h x_d_buffer = nullptr;
+vx_buffer_h x_bsums_buffer = nullptr;
 vx_buffer_h y_buffer = nullptr;
 vx_queue_h  queue   = nullptr;
 vx_module_h module_ = nullptr;
@@ -57,7 +82,7 @@ kernel_arg_t kernel_arg = {};
 
 static void show_usage() {
    std::cout << "Vortex QGEMV (quantized matrix-vector multiplication)." << std::endl;
-   std::cout << "Usage: [--type q8_0|q4_0|iq4_nl|mxfp4] [--engine scalar] [-m rows] [-k row length] [-n vectors] [--seed S] [-h: help]" << std::endl;
+   std::cout << "Usage: [--type q8_0|q4_0|iq4_nl|mxfp4|q4_k|q3_k] [--engine scalar] [-m rows] [-k row length] [-n vectors] [--seed S] [-h: help]" << std::endl;
 }
 
 static void parse_args(int argc, char **argv) {
@@ -93,8 +118,11 @@ static void parse_args(int argc, char **argv) {
     }
   }
   if (!known || engine != "scalar") {
-    std::cout << "Error: only --type q8_0|q4_0|iq4_nl|mxfp4 --engine scalar are implemented so far" << std::endl;
+    std::cout << "Error: only --type q8_0|q4_0|iq4_nl|mxfp4|q4_k|q3_k --engine scalar are implemented so far" << std::endl;
     exit(-1);
+  }
+  if (wtype == GGML_TYPE_Q4_K || wtype == GGML_TYPE_Q3_K) {
+    xtype = GGML_TYPE_Q8_K;
   }
   if (N != 1) {
     std::cout << "Error: only -n 1 (GEMV) is implemented so far" << std::endl;
@@ -114,6 +142,7 @@ void cleanup() {
     if (w_d_buffer)  vx_buffer_release(w_d_buffer);
     if (x_qs_buffer) vx_buffer_release(x_qs_buffer);
     if (x_d_buffer)  vx_buffer_release(x_d_buffer);
+    if (x_bsums_buffer) vx_buffer_release(x_bsums_buffer);
     if (y_buffer)    vx_buffer_release(y_buffer);
     if (kernel)  vx_kernel_release(kernel);
     if (module_) vx_module_release(module_);
@@ -163,6 +192,20 @@ static void repack_weights(const void* blocks, size_t nblocks, std::vector<uint8
     repack_mxfp4(src, nblocks, qs.data(), d.data());
     break;
   }
+  case GGML_TYPE_Q4_K: {
+    const auto* src = static_cast<const Q4K_Block*>(blocks);
+    qs.resize(nblocks * sizeof(src->qs));
+    d.resize(nblocks * sizeof(Q4K_Scales));
+    repack_q4_k(src, nblocks, qs.data(), reinterpret_cast<Q4K_Scales*>(d.data()));
+    break;
+  }
+  case GGML_TYPE_Q3_K: {
+    const auto* src = static_cast<const Q3K_Block*>(blocks);
+    qs.resize(nblocks * sizeof(src->qs));
+    d.resize(nblocks * sizeof(Q3K_Meta));
+    repack_q3_k(src, nblocks, qs.data(), reinterpret_cast<Q3K_Meta*>(d.data()));
+    break;
+  }
   default:
     break;  // parse_args accepts only the formats above
   }
@@ -174,7 +217,7 @@ static void repack_weights(const void* blocks, size_t nblocks, std::vector<uint8
 static void gemv_ref(const void* w, const void* x, float* y) {
   std::vector<float> wf(size_t(M) * K), xf(K);
   ggml_get_type_traits(wtype)->to_float(w, wf.data(), wf.size());
-  ggml_get_type_traits(xtype)->to_float(x, xf.data(), xf.size());
+  dequantize_act(x, xf.data(), xf.size());
   for (uint32_t m = 0; m < M; ++m) {
     double sum = 0.0;
     for (uint32_t k = 0; k < K; ++k) {
@@ -211,15 +254,22 @@ int main(int argc, char *argv[]) {
 
   std::vector<uint8_t> w_blk(M * ggml_row_size(wtype, K)), x_blk(ggml_row_size(xtype, K));
   ggml_get_type_traits(wtype)->from_float_ref(h_w.data(), w_blk.data(), h_w.size());
-  ggml_get_type_traits(xtype)->from_float_ref(h_x.data(), x_blk.data(), h_x.size());
+  quantize_act(h_x.data(), x_blk.data(), h_x.size());
 
   std::vector<uint8_t> w_qs;
   std::vector<uint8_t> w_d;
   repack_weights(w_blk.data(), h_w.size() / ggml_blck_size(wtype), w_qs, w_d);
   std::vector<int8_t> x_qs(K);
   std::vector<float> x_d(K / ggml_blck_size(xtype));
-  repack_q8_0_act(reinterpret_cast<const Q8_Block*>(x_blk.data()), x_d.size(), x_qs.data(),
-                  x_d.data());
+  std::vector<int16_t> x_bsums;
+  if (xtype == GGML_TYPE_Q8_K) {
+    x_bsums.resize(K / 16);
+    repack_q8_k_act(reinterpret_cast<const Q8K_Block*>(x_blk.data()), x_d.size(),
+                    x_qs.data(), x_d.data(), x_bsums.data());
+  } else {
+    repack_q8_0_act(reinterpret_cast<const Q8_Block*>(x_blk.data()), x_d.size(),
+                    x_qs.data(), x_d.data());
+  }
 
   // Open device connection
   std::cout << "Opening device connection" << std::endl;
@@ -238,6 +288,10 @@ int main(int argc, char *argv[]) {
   upload(&w_d_buffer, &kernel_arg.w_d_addr, w_d.data(), w_d.size());
   upload(&x_qs_buffer, &kernel_arg.x_qs_addr, x_qs.data(), x_qs.size());
   upload(&x_d_buffer, &kernel_arg.x_d_addr, x_d.data(), x_d.size() * sizeof(float));
+  if (!x_bsums.empty()) {
+    upload(&x_bsums_buffer, &kernel_arg.x_bsums_addr, x_bsums.data(),
+           x_bsums.size() * sizeof(int16_t));
+  }
   const uint32_t y_size = M * sizeof(float);
   RT_CHECK(vx_buffer_create(device, y_size, VX_MEM_WRITE, &y_buffer));
   RT_CHECK(vx_buffer_address(y_buffer, &kernel_arg.y_addr));

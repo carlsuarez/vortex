@@ -25,8 +25,21 @@ void repack_iq4_nl(const IQ4NL_Block* src, size_t nblocks, uint8_t* qs, uint16_t
 // scales stay one byte each, so the bytes per weight match the format.
 void repack_mxfp4(const MXFP4_Block* src, size_t nblocks, uint8_t* qs, uint8_t* e);
 
+// Q4_K weights: the nibbles keep ggml's order (blocks.h), and each block's d, dmin and
+// packed 6-bit scales stay together as one 16 B Q4K_Scales, still 144 B per 256 weights.
+void repack_q4_k(const Q4K_Block* src, size_t nblocks, uint8_t* qs, Q4K_Scales* s);
+
+// Q3_K weights: qs (the low 2 bits) as one plane, and each block's hmask, packed scales
+// and d together as one 46 B Q3K_Meta, still 110 B per 256 weights.
+void repack_q3_k(const Q3K_Block* src, size_t nblocks, uint8_t* qs, Q3K_Meta* meta);
+
 // Activations. Widening the scales to fp32 is exact, and leaves the kernel converting
 // only the weight scales.
 void repack_q8_0_act(const Q8_Block* src, size_t nblocks, int8_t* qs, float* d);
+
+// Q8_K activations, for K-quant weights: the scale is already fp32, and the 16 bsums
+// per block get their own plane.
+void repack_q8_k_act(const Q8K_Block* src, size_t nblocks, int8_t* qs, float* d,
+                     int16_t* bsums);
 
 #endif

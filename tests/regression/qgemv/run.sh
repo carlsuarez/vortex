@@ -29,6 +29,15 @@ SMOKE=(
     "--type mxfp4 --engine scalar -m 37 -k 288 --seed 2"
     "--type mxfp4 --engine scalar -m 288 -k 768 --seed 3"
     "--type mxfp4 --engine scalar -m 1 -k 32 --seed 4"
+    # K-quants: rows are whole 256-weight blocks
+    "--type q4_k --engine scalar -m 64 -k 256"
+    "--type q4_k --engine scalar -m 37 -k 512 --seed 2"
+    "--type q4_k --engine scalar -m 288 -k 768 --seed 3"
+    "--type q4_k --engine scalar -m 1 -k 256 --seed 4"
+    "--type q3_k --engine scalar -m 64 -k 256"
+    "--type q3_k --engine scalar -m 37 -k 512 --seed 2"
+    "--type q3_k --engine scalar -m 288 -k 768 --seed 3"
+    "--type q3_k --engine scalar -m 1 -k 256 --seed 4"
 )
 
 build() {  # CONFIGS
