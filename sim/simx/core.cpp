@@ -1217,6 +1217,13 @@ public:
     return std::static_pointer_cast<LsuUnit>(func_units_.at((int)FUType::LSU))->drained();
   }
 
+#ifdef VX_CFG_EXT_DCMP_ENABLE
+  int dcmp_dcr_write(uint32_t addr, uint32_t value) {
+    std::static_pointer_cast<LsuUnit>(func_units_.at((int)FUType::LSU))->dcmp_dcr_write(addr, value);
+    return 0;
+  }
+#endif
+
   int dcr_read(uint32_t addr, uint32_t tag, uint32_t* value) {
     // tag arrives as (mpm_class << 6) | mpm_tag_idx after socket strips core_id
     switch (addr) {
@@ -1539,6 +1546,11 @@ int Core::dcr_write(uint32_t addr, uint32_t value) {
   __unused(addr);
   __unused(value);
   // KMU DCRs are handled at ProcessorImpl level and never reach here.
+#ifdef VX_CFG_EXT_DCMP_ENABLE
+  if (addr >= VX_DCR_DCMP_STATE_BEGIN && addr < VX_DCR_DCMP_STATE_END) {
+    return impl_->dcmp_dcr_write(addr, value);
+  }
+#endif
   return 0;
 }
 

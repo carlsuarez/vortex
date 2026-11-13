@@ -40,6 +40,8 @@ VX_CFG_EXT_ZFHMIN_ENABLE = false
 VX_CFG_EXT_TCU_ENABLE = false
 VX_CFG_EXT_DMA_ENABLE = false
 VX_CFG_EXT_DXA_ENABLE = false
+# DCMP.LD: a load that decodes 4-bit weight codes through a LUT and scales them to fp16.
+VX_CFG_EXT_DCMP_ENABLE = false
 VX_CFG_EXT_TEX_ENABLE = false
 VX_CFG_EXT_RASTER_ENABLE = false
 VX_CFG_EXT_OM_ENABLE = false

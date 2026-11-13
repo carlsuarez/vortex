@@ -308,6 +308,9 @@ static op_string_t op_string(const Instr &instr) {
         if (lsuArgs.matrix) {
           return {"VX_LDM", to_hex_str(lsuArgs.offset)};
         }
+        if (lsuArgs.dcmp) {
+          return {"DCMP.LD", ""};
+        }
         if (instr.is_macro_op() && dst_float && lsuArgs.width == 0) {
           return {"PACKLB.F", ""};
         }
@@ -1096,6 +1099,14 @@ Instr::Ptr Decoder::decode(uint32_t code, uint64_t uuid) {
       instr->set_dest_reg(rd, RegType::Float);
       instr->set_src_reg(0, rs1, RegType::Integer);
       instr->set_src_reg(1, rs2, RegType::Integer);
+    #ifdef VX_CFG_EXT_DCMP_ENABLE
+      if (funct3 == 3) { // vx_dcmp_ld: one byte of 4-bit codes → two scaled fp16; rs2 = fp32 scale
+        IntrLsuArgs dcmpArgs{/*width=LBU*/ 4, /*stride*/ 0, /*offset*/ 0};
+        dcmpArgs.dcmp = true;
+        instr->set_args(dcmpArgs);
+        break;
+      }
+    #endif
       switch (funct3) {
       case 1: { // vx_packlb_f: 4 strided bytes (LB-width) → packed FP
         instr->set_args(IntrLsuArgs{/*width=LB*/ 0, /*stride*/ 0, /*offset*/ 0});

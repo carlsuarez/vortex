@@ -636,6 +636,26 @@ inline float vx_packlh_f(const void* base, size_t stride) {
     return out;
 }
 
+//
+// Weight Decompression Extension (VX_CFG_EXT_DCMP_ENABLE)
+//
+
+// Decompress-load one byte of two 4-bit codes into two fp16 in one FP register.
+// LUT is the 16-entry int8 table in VX_DCR_DCMP_LUT0..3; each value is
+// computed in fp32 and rounded to fp16 (RNE):
+// fd = bitcast<float>( fp16(LUT[MEM8[addr] >> 4]  * scale) << 16
+//                    | fp16(LUT[MEM8[addr] & 15] * scale));
+__attribute__((always_inline))
+inline float vx_dcmp_ld(const void* addr, float scale) {
+    float out;
+    uint32_t scale_bits;
+    __builtin_memcpy(&scale_bits, &scale, sizeof(scale_bits));
+    __asm__ volatile (
+        ".insn r %1, 3, 4, %0, %2, %3" : "=f"(out) : "i"(RISCV_CUSTOM0), "r"(addr), "r"(scale_bits) : "memory"
+    );
+    return out;
+}
+
 #ifdef __cplusplus
 }
 #endif

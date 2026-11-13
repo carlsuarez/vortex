@@ -98,6 +98,10 @@ public:
 	// Returns true when all LSU blocks have no in-flight requests.
 	bool drained() const;
 
+#ifdef VX_CFG_EXT_DCMP_ENABLE
+	void dcmp_dcr_write(uint32_t addr, uint32_t value);
+#endif
+
 protected:
 	void on_reset() override;
 	void on_tick() override;
@@ -203,6 +207,13 @@ private:
 	void arbitrate_results(uint32_t b);
 
 	uint64_t pending_loads_;
+
+#ifdef VX_CFG_EXT_DCMP_ENABLE
+	// DCR state: written before launch, so on_reset must not clear it.
+	std::array<int8_t, 16> dcmp_lut_ = {};
+
+	uint32_t dcmp_decode(uint8_t byte, uint32_t scale_bits) const;
+#endif
 };
 
 }

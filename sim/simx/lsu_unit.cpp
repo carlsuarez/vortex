@@ -26,6 +26,9 @@
 #include "stack_interleave.h"
 #include "VX_types.h"
 #include "VX_config.h"
+#ifdef VX_CFG_EXT_DCMP_ENABLE
+#include <rvfloats.h>
+#endif
 #ifdef VX_CFG_EXT_LDST_MATRIX_ENABLE
 #include "fragment_layout.h"
 #endif
@@ -191,6 +194,31 @@ LsuUnit::~LsuUnit()
 // Returns true when no block holds an instruction with requests still to send
 // or a read awaiting its response; ops still in the dispatch buffer do not hold
 // a barrier.
+#ifdef VX_CFG_EXT_DCMP_ENABLE
+void LsuUnit::dcmp_dcr_write(uint32_t addr, uint32_t value) {
+	uint32_t base = 4 * (addr - VX_DCR_DCMP_LUT0);
+	for (uint32_t i = 0; i < 4; ++i) {
+		dcmp_lut_.at(base + i) = int8_t(value >> (8 * i));
+	}
+}
+
+// Both nibbles are scaled in fp32 and rounded to fp16 (RNE) once, so a
+// software reference that does the same math matches bit for bit.
+uint32_t LsuUnit::dcmp_decode(uint8_t byte, uint32_t scale_bits) const {
+	float scale;
+	std::memcpy(&scale, &scale_bits, 4);
+	uint32_t out = 0;
+	for (uint32_t h = 0; h < 2; ++h) {
+		float v = float(dcmp_lut_.at((byte >> (4 * h)) & 0xf)) * scale;
+		uint32_t v_bits;
+		std::memcpy(&v_bits, &v, 4);
+		uint32_t fflags = 0;
+		out |= uint32_t(rv_ftoh_s(v_bits, 0, &fflags)) << (16 * h);
+	}
+	return out;
+}
+#endif
+
 bool LsuUnit::drained() const {
 #ifdef TCU_META_ENABLE
 	// TcuRspOut forwards to the TCU's endpoint, so query via size() (empty()
@@ -400,8 +428,15 @@ void LsuUnit::process_response_step(uint32_t b) {
 			default:
 				std::abort();
 			}
-			// Place at bytesel-specified position; OR-in NaN-box for Float dest.
 			auto& dst = entry.trace->dst_data.at(lane_info.tid);
+#ifdef VX_CFG_EXT_DCMP_ENABLE
+			if (entry.lsu_args.dcmp) {
+				uint32_t scale_bits = trace->src_data.at(1).at(lane_info.tid).u;
+				dst.u64 = dcmp_decode(uint8_t(read_data), scale_bits) | nanbox::box(0, 32);
+				continue;
+			}
+#endif
+			// Place at bytesel-specified position; OR-in NaN-box for Float dest.
 			uint32_t box_bits = half_float ? 16 : 32;
 			dst.u64 = (formatted << (8 * byte_off))
 			        | (nan_box ? nanbox::box(0, box_bits) : 0);

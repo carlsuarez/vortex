@@ -413,6 +413,15 @@ VX_DCR_RTU_REFORM_THRESH    = 0x0A5
 VX_DCR_RTU_STATS_RESET      = 0x0A6
 VX_DCR_RTU_STATE_END        = 0x0A7
 
+[dcr_dcmp]
+# DCMP.LD weight LUT: 16 int8 entries, four per word, entry 4*i+j in byte j of LUTi.
+VX_DCR_DCMP_STATE_BEGIN     = 0x0B0
+VX_DCR_DCMP_LUT0            = 0x0B0
+VX_DCR_DCMP_LUT1            = 0x0B1
+VX_DCR_DCMP_LUT2            = 0x0B2
+VX_DCR_DCMP_LUT3            = 0x0B3
+VX_DCR_DCMP_STATE_END       = 0x0B4
+
 [rtu_slots]
 # RTU register file slot IDs — per-(warp,lane) named 32-bit slots in the RTU's hit
 # window. The layout is CONTIGUITY-ORDERED: the RTU moves ray state as
