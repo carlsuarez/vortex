@@ -249,19 +249,25 @@ struct coord_table_t {
 static constexpr coord_table_t<uint16_t, tcu_ctx::tileM * tcu_ctx::tileK> a_coords{};
 static constexpr coord_table_t<float, tcu_ctx::tileM * tcu_ctx::tileN> c_coords{};
 
+// bit casts: a memcpy through an array would round-trip the stack
 static inline float pack_fp16x2(float lo, float hi) {
-  _Float16 h[2] = {(_Float16)lo, (_Float16)hi};
-  float f;
-  __builtin_memcpy(&f, h, sizeof f);
-  return f;
+  uint32_t l = __builtin_bit_cast(uint16_t, (_Float16)lo);
+  uint32_t h = __builtin_bit_cast(uint16_t, (_Float16)hi);
+  return bits_to_fp32(l | (h << 16));
 }
 
 template <wfmt_t F>
 static inline float weight_scale(const uint8_t *w_d, uint32_t i) {
-  if constexpr (F == wfmt_t::mxfp4)
+  if constexpr (F == wfmt_t::mxfp4) {
     return e8m0_to_fp32_half(w_d[i]);
-  else
+  } else {
+#ifdef VX_CFG_EXT_ZFHMIN_ENABLE
+    // one fcvt.s.h, exact like the bit-twiddling fallback
+    return float(reinterpret_cast<const _Float16 *>(w_d)[i]);
+#else
     return fp16_to_fp32(reinterpret_cast<const uint16_t *>(w_d)[i]);
+#endif
+  }
 }
 
 template <wfmt_t F>
@@ -305,30 +311,52 @@ static inline void qgemv_tcu(kernel_arg_t *arg) {
   tcu_ctx::fragment_b fb;
   tcu_ctx::fragment_acc fc;
 
-  // Per A register: the weight row's offset in w_d, and its byte offset in w_qs at k = 0.
-  // Rows past M read row M-1 with a zero scale.
-  uint32_t d_off[NRA], q_off[NRA];
-  uint32_t valid = 0;
+  // A lane's A registers come in pairs (2j, 2j+1) on one weight row, K-adjacent, with the row
+  // stepping between pairs, so the lane needs one scale and one row pointer per pair. Per-
+  // register state would not fit in registers, and spill stores reach DRAM through the
+  // write-through L1. The probe checks the layout, and a lane that sees another one poisons
+  // its output so the test fails.
+  constexpr uint32_t NP = NRA / 2;
   tcu_ctx::load_matrix_sync(fa, a_coords.v, TK);
+  uint32_t idx0 = fp32_to_bits(fa.data[0]) & 0xffff;
+  uint32_t row0 = idx0 / TK, col0 = idx0 % TK;
+  uint32_t row_step = (fp32_to_bits(fa.data[2]) & 0xffff) / TK - row0;
+  uint32_t col_step = (fp32_to_bits(fa.data[1]) & 0xffff) % TK - col0;
+  bool layout_ok = true;
   for (uint32_t i = 0; i < NRA; ++i) {
     uint32_t idx = fp32_to_bits(fa.data[i]) & 0xffff;
-    uint32_t row = tile_row + idx / TK, col = idx % TK;
-    valid |= uint32_t(row < M) << i;
+    layout_ok &= (idx == (row0 + (i / 2) * row_step) * TK + col0 + (i % 2) * col_step);
+  }
+  // byte distance between a pair's two registers
+  uint32_t q_pair = nibbles ? col_step / 2 : col_step;
+
+  // Rows past M read row M-1 with a zero scale.
+  const uint8_t *q_row[NP];
+  uint32_t d_row[NP];
+  uint32_t valid = 0;
+  for (uint32_t j = 0; j < NP; ++j) {
+    uint32_t row = tile_row + row0 + j * row_step;
+    valid |= uint32_t(row < M) << j;
     row = (row < M) ? row : M - 1;
-    d_off[i] = row * nb;
-    q_off[i] = nibbles ? (row * (K / 2) + col / 2) : (row * K + col);
+    d_row[j] = row * nb;
+    q_row[j] = w_qs + (nibbles ? (row * (K / 2) + col0 / 2) : (row * K + col0));
   }
 
   tcu_ctx::fill_fragment(fc, 0);
   for (uint32_t b = 0; b < nb; ++b) {
-    float s[NRA];
-    for (uint32_t i = 0; i < NRA; ++i)
-      s[i] = ((valid >> i) & 1) ? weight_scale<F>(w_d, d_off[i] + b) : 0.0f;
+    float s[NP];
+    for (uint32_t j = 0; j < NP; ++j)
+      s[j] = ((valid >> j) & 1) ? weight_scale<F>(w_d, d_row[j] + b) : 0.0f;
+    // unrolling this loop runs out of integer registers (DCMP.LD has no address immediate,
+    // so each load holds its own address) and spills the scales
+#pragma clang loop unroll(disable)
     for (uint32_t t = 0; t < 32 / TK; ++t) {
       uint32_t k0 = b * 32 + t * TK;
       uint32_t q0 = nibbles ? (k0 / 2) : k0;
-      for (uint32_t i = 0; i < NRA; ++i)
-        fa.data[i] = decode_pair<F, dcmp>(w_qs + q_off[i] + q0, s[i]);
+      for (uint32_t j = 0; j < NP; ++j) {
+        fa.data[2 * j] = decode_pair<F, dcmp>(q_row[j] + q0, s[j]);
+        fa.data[2 * j + 1] = decode_pair<F, dcmp>(q_row[j] + q0 + q_pair, s[j]);
+      }
       // ldm 0 repeats x in every column of B; column 0 of the result is y
       tcu_ctx::load_matrix_sync<vt::col_major>(fb, x16 + k0, 0);
       tcu_ctx::mma_sync(fc, fa, fb, fc);
@@ -341,7 +369,7 @@ static inline void qgemv_tcu(kernel_arg_t *arg) {
     uint32_t idx = uint32_t(pc.data[i]);
     uint32_t row = tile_row + idx / TN;
     if (idx % TN == 0 && row < M)
-      y[row] = fc.data[i];
+      y[row] = layout_ok ? fc.data[i] : __builtin_nanf("");
   }
 }
 
