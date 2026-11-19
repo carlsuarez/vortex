@@ -210,6 +210,17 @@ import VX_tcu_pkg::*;
         .flush_l1_only(dcr_flush_l1_only)
     );
 
+`ifdef VX_CFG_EXT_DCMP_ENABLE
+    wire [DCMP_LUT_BITS-1:0] dcmp_lut;
+
+    VX_dcmp_dcr dcmp_dcr (
+        .clk           (clk),
+        .dcr_req_valid (dcr_bus_if.req_valid),
+        .dcr_req_data  (dcr_bus_if.req_data),
+        .lut           (dcmp_lut)
+    );
+`endif
+
     wire sched_busy;
     wire [PERF_CTR_BITS-1:0] sched_cycles;
     wire [PERF_CTR_BITS-1:0] sched_instret;
@@ -444,6 +455,9 @@ import VX_tcu_pkg::*;
                 .clk                  (clk),
                 .reset                (reset),
                 .core_id              (core_id),
+            `ifdef VX_CFG_EXT_DCMP_ENABLE
+                .dcmp_lut             (dcmp_lut),
+            `endif
                 .slice_id             (ISSUE_ISW_W'(i)),
             `ifdef PERF_ENABLE
                 .fetch_perf           (per_slice_fetch_perf[i]),
@@ -668,6 +682,9 @@ import VX_tcu_pkg::*;
                     .clk                  (clk),
                     .reset                (reset),
                     .core_id              (core_id),
+                `ifdef VX_CFG_EXT_DCMP_ENABLE
+                    .dcmp_lut             (dcmp_lut),
+                `endif
                     .slice_id             (ISSUE_ISW_W'(i)),
                 `ifdef PERF_ENABLE
                     .issue_perf           (per_slice_issue_perf[i]),
@@ -762,6 +779,9 @@ import VX_tcu_pkg::*;
                 .clk                  (clk),
                 .reset                (reset),
                 .core_id              (core_id),
+            `ifdef VX_CFG_EXT_DCMP_ENABLE
+                .dcmp_lut             (dcmp_lut),
+            `endif
 
             `ifdef PERF_ENABLE
                 .lsu_perf_rd_req_fire (lsu_perf_rd_req_fire),

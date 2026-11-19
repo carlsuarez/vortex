@@ -22,6 +22,9 @@ module VX_lsu_unit import VX_gpu_pkg::*; #(
     input wire              reset,
 
     input wire [CORE_ID_WIDTH-1:0] core_id,
+`ifdef VX_CFG_EXT_DCMP_ENABLE
+    input wire [DCMP_LUT_BITS-1:0] dcmp_lut,
+`endif
 
     // Inputs
     VX_dispatch_if.slave    dispatch_if [`VX_CFG_ISSUE_WIDTH],
@@ -90,6 +93,9 @@ module VX_lsu_unit import VX_gpu_pkg::*; #(
             .clk              (clk),
             .reset            (reset),
             .core_id          (core_id),
+        `ifdef VX_CFG_EXT_DCMP_ENABLE
+            .dcmp_lut         (dcmp_lut),
+        `endif
             .execute_if       (per_block_execute_if[block_idx]),
             .result_if        (per_block_result_if[block_idx]),
         `ifdef PERF_ENABLE

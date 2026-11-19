@@ -197,6 +197,7 @@ package VX_trace_pkg;
                     INST_LSU_LD: `TRACE(level, ("FLD"))
                     INST_LSU_SW: `TRACE(level, ("FSW"))
                     INST_LSU_SD: `TRACE(level, ("FSD"))
+                    INST_LSU_DCMP:`TRACE(level, ("DCMP.LD"))
                     default:     `TRACE(level, ("?"))
                 endcase
             end else begin

@@ -881,6 +881,19 @@ module VX_decode import
                                 `USED_IREG (rs1);
                                 `USED_IREG (rs2);
                             end
+                        `ifdef VX_CFG_EXT_DCMP_ENABLE
+                            3'h3: begin // DCMP.LD — byte at rs1, rs2 = fp32 scale
+                                ex_type              = EX_LSU;
+                                op_type              = INST_OP_BITS'(INST_LSU_DCMP);
+                                op_args.lsu.is_store = 0;
+                                op_args.lsu.is_float = 1;
+                                op_args.lsu.pack     = 2'b00;
+                                op_args.lsu.offset   = '0;
+                                `USED_FREG (rd);
+                                `USED_IREG (rs1);
+                                `USED_IREG (rs2);
+                            end
+                        `endif
                             default:;
                         endcase
                     end

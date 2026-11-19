@@ -36,6 +36,9 @@ import VX_tcu_pkg::*;
     input wire              reset,
 
     input wire [CORE_ID_WIDTH-1:0] core_id,
+`ifdef VX_CFG_EXT_DCMP_ENABLE
+    input wire [DCMP_LUT_BITS-1:0] dcmp_lut,
+`endif
     input wire [ISSUE_ISW_W-1:0]   slice_id,
 
     VX_dispatch_if.slave    dispatch_if [NUM_EX_UNITS],
@@ -181,6 +184,9 @@ import VX_tcu_pkg::*;
         .clk              (clk),
         .reset            (reset),
         .core_id          (core_id),
+    `ifdef VX_CFG_EXT_DCMP_ENABLE
+        .dcmp_lut         (dcmp_lut),
+    `endif
         .execute_if       (lsu_execute_if[0]),
         .result_if        (lsu_result_if[0]),
     `ifdef PERF_ENABLE

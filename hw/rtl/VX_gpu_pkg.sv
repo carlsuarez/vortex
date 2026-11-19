@@ -512,6 +512,8 @@ package VX_gpu_pkg;
     localparam INST_LSU_SH =     4'b1001;
     localparam INST_LSU_SW =     4'b1010;
     localparam INST_LSU_SD =     4'b1011; // new for RV64I SD
+    // DCMP.LD: an LBU (fmt and size from bits 2:0) whose response is decompressed
+    localparam INST_LSU_DCMP =   4'b1100;
     localparam INST_LSU_FENCE_IO = 4'b1110; // a fence ordering only device (IO) accesses
     localparam INST_LSU_FENCE =  4'b1111;
     localparam INST_LSU_BITS =   4;
@@ -1934,9 +1936,17 @@ package VX_gpu_pkg;
     // Width of the tag carried over VX_lsu_sched_if: lsu_header + op_type
     // + per-lane align + packet allocator addr + fence flag (matches the
     // local TAG_WIDTH built inside VX_lsu_block).
+`ifdef VX_CFG_EXT_DCMP_ENABLE
+    // + the DCMP.LD scale-table slot
+    localparam LSU_DCMP_SLOT_BITS   = `LOG2UP(`VX_CFG_LSU_PENDING_SIZE);
+    localparam DCMP_LUT_BITS        = 16 * 8;
+`else
+    localparam LSU_DCMP_SLOT_BITS   = 0;
+`endif
     localparam LSU_CLIENT_TAG_WIDTH = $bits(lsu_header_t) + INST_LSU_BITS
                                     + (`VX_CFG_NUM_LSU_LANES * `CLOG2(LSU_WORD_SIZE))
-                                    + `LOG2UP(`VX_CFG_LSU_PENDING_SIZE) + 1;
+                                    + `LOG2UP(`VX_CFG_LSU_PENDING_SIZE) + 1
+                                    + LSU_DCMP_SLOT_BITS;
 
     // Request/response payloads for VX_lsu_sched_if. Valid/ready live on
     // the interface, never in the payload (Vortex elastic-idiom rule).

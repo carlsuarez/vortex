@@ -225,7 +225,7 @@ the table in the same change.
 | | | `0x01` | vote / shuffle | R |
 | | | `0x02` | tensor core (WMMA/WGMMA) | R |
 | | | `0x03` | DXA async copy | R |
-| | | `0x04` | packed loads (`vx_packl*`) | R |
+| | | `0x04` | packed loads (`vx_packl*`, `funct3` 1–2); `vx_dcmp_ld` (`funct3` 3, DCMP) | R |
 | custom-1 `0x2B` | `funct3` | `0` | `vx_wgather` | R4 |
 | | | `3` | `vx_om_export` | R4 |
 | | | `5` | `vx_tex` | R4 |

@@ -26,6 +26,9 @@ import VX_tcu_pkg::*;
     input wire              reset,
 
     input wire [CORE_ID_WIDTH-1:0] core_id,
+`ifdef VX_CFG_EXT_DCMP_ENABLE
+    input wire [DCMP_LUT_BITS-1:0] dcmp_lut,
+`endif
 
     // LSU memory paths
 `ifdef PERF_ENABLE
@@ -117,6 +120,9 @@ import VX_tcu_pkg::*;
         .clk             (clk),
         .reset           (reset),
         .core_id         (core_id),
+    `ifdef VX_CFG_EXT_DCMP_ENABLE
+        .dcmp_lut        (dcmp_lut),
+    `endif
         .dispatch_if         (dispatch_if[EX_LSU * `VX_CFG_ISSUE_WIDTH +: `VX_CFG_ISSUE_WIDTH]),
         .commit_if           (commit_if[EX_LSU * `VX_CFG_ISSUE_WIDTH +: `VX_CFG_ISSUE_WIDTH]),
     `ifdef PERF_ENABLE
