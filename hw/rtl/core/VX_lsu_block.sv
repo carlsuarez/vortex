@@ -578,73 +578,35 @@ module VX_lsu_block import VX_gpu_pkg::*; #(
     // decoder, then win the response buffer over plain loads: the decoder
     // stalls as a whole, so it must drain first.
     wire rsp_is_dcmp = (rsp_op_type == INST_LSU_DCMP);
-    wire mem_rsp_dcmp_fire = mem_rsp_fire && rsp_is_dcmp;
-
-    VX_allocator #(
-        .SIZE (`VX_CFG_LSU_PENDING_SIZE)
-    ) dcmp_allocator (
-        .clk          (clk),
-        .reset        (reset),
-        .acquire_en   (mem_req_fire && req_is_dcmp),
-        .acquire_addr (dcmp_waddr),
-        .release_en   (mem_rsp_dcmp_fire && mem_rsp_eop),
-        .release_addr (dcmp_raddr),
-        `UNUSED_PIN   (empty),
-        .full         (dcmp_full)
-    );
-
-    wire [NUM_LANES-1:0][31:0] req_scale, rsp_scale;
+    wire dcmp_out_valid, dcmp_ready_in;
+    lsu_header_t dcmp_out_hdr;
+    wire [NUM_LANES-1:0][31:0] req_scale, dcmp_out_data;
     for (genvar i = 0; i < NUM_LANES; ++i) begin : g_req_scale
         assign req_scale[i] = execute_if.data.rs2_data[i][31:0];
     end
 
-    VX_dp_ram #(
-        .DATAW    (NUM_LANES * 32),
-        .SIZE     (`VX_CFG_LSU_PENDING_SIZE),
-        .OUT_REG  (0),
-        .LUTRAM   (1),
-        .RDW_MODE ("R")
-    ) dcmp_scale_store (
-        .clk   (clk),
-        .reset (reset),
-        .read  (1'b1),
-        .write (mem_req_fire && req_is_dcmp),
-        .wren  (1'b1),
-        .waddr (dcmp_waddr),
-        .wdata (req_scale),
-        .raddr (dcmp_raddr),
-        .rdata (rsp_scale)
-    );
-
-    wire dcmp_out_valid;
-    lsu_header_t dcmp_out_hdr;
-    wire [NUM_LANES-1:0][31:0] dcmp_out_data;
-    wire dcmp_enable = ~(dcmp_out_valid && ~rsp_buf_ready_in);
-
-    for (genvar i = 0; i < NUM_LANES; ++i) begin : g_dcmp_decode
-        VX_dcmp_decode #(
-            .LATENCY (`VX_CFG_DCMP_LATENCY)
-        ) dcmp_decode (
-            .clk    (clk),
-            .reset  (reset),
-            .enable (dcmp_enable),
-            .lut    (dcmp_lut),
-            .data   (rsp_bytes[i]),
-            .scale  (rsp_scale[i]),
-            .result (dcmp_out_data[i])
-        );
-    end
-
-    VX_pipe_register #(
-        .DATAW  (1 + $bits(lsu_header_t)),
-        .RESETW (1),
-        .DEPTH  (`VX_CFG_DCMP_LATENCY)
-    ) dcmp_pipe_reg (
-        .clk      (clk),
-        .reset    (reset),
-        .enable   (dcmp_enable),
-        .data_in  ({mem_rsp_valid && rsp_is_dcmp, rsp_hdr2}),
-        .data_out ({dcmp_out_valid, dcmp_out_hdr})
+    VX_dcmp_unit #(
+        .NUM_LANES (NUM_LANES),
+        .SIZE      (`VX_CFG_LSU_PENDING_SIZE),
+        .TAGW      ($bits(lsu_header_t))
+    ) dcmp_unit (
+        .clk           (clk),
+        .reset         (reset),
+        .lut           (dcmp_lut),
+        .req_fire      (mem_req_fire && req_is_dcmp),
+        .req_scale     (req_scale),
+        .req_slot      (dcmp_waddr),
+        .req_full      (dcmp_full),
+        .rsp_valid_in  (mem_rsp_valid && rsp_is_dcmp),
+        .rsp_ready_in  (dcmp_ready_in),
+        .rsp_slot      (dcmp_raddr),
+        .rsp_eop       (mem_rsp_eop),
+        .rsp_bytes     (rsp_bytes),
+        .rsp_tag_in    (rsp_hdr2),
+        .rsp_valid_out (dcmp_out_valid),
+        .rsp_ready_out (rsp_buf_ready_in),
+        .rsp_data_out  (dcmp_out_data),
+        .rsp_tag_out   (dcmp_out_hdr)
     );
 
     wire [NUM_LANES-1:0][`VX_CFG_XLEN-1:0] dcmp_out_xdata;
@@ -658,7 +620,7 @@ module VX_lsu_block import VX_gpu_pkg::*; #(
 
     assign rsp_buf_valid_in = dcmp_out_valid || (mem_rsp_valid && ~rsp_is_dcmp);
     assign rsp_buf_data_in  = dcmp_out_valid ? {dcmp_out_hdr, dcmp_out_xdata} : {rsp_hdr2, rsp_data};
-    assign mem_rsp_ready    = rsp_is_dcmp ? dcmp_enable : (rsp_buf_ready_in && ~dcmp_out_valid);
+    assign mem_rsp_ready    = rsp_is_dcmp ? dcmp_ready_in : (rsp_buf_ready_in && ~dcmp_out_valid);
 `else
     `UNUSED_VAR (rsp_bytes)
     assign rsp_buf_valid_in = mem_rsp_valid;

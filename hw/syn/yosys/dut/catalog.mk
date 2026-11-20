@@ -9,7 +9,7 @@
 # synthesizes, so both gates measure the same modules and a divergence between
 # them is meaningful rather than an artefact of two DUT lists.
 
-DUTS := cache core lmem tcu gfx gfxvm tex raster om rtu dxa mufu vm tensor top vortex
+DUTS := cache core lmem tcu gfx gfxvm tex raster om rtu dxa mufu dcmp vm tensor top vortex
 
 UNITTEST_DIR ?= $(VORTEX_HOME)/hw/unittest
 AFU_RTL_DIR  ?= $(VORTEX_HOME)/hw/rtl/afu
@@ -74,6 +74,12 @@ dxa_CFG := -DVX_CFG_NUM_THREADS=16 -DVX_CFG_NUM_WARPS=16 -DVX_CFG_EXT_DXA_ENABLE
 mufu_TOP := VX_mufu_unit_top
 mufu_INC := -I$(UNITTEST_DIR)/mufu_unit
 mufu_CFG := -DVX_CFG_NUM_THREADS=16 -DVX_CFG_NUM_WARPS=16 -DVX_CFG_EXT_MUFU_ENABLE
+
+# DCMP.LD's per-core cost at the QDEC_WMMA shape (4 threads, one LSU block):
+# the LUT latch plus one LSU block's decode lanes and scale table.
+dcmp_TOP := VX_dcmp_top
+dcmp_INC := -I$(UNITTEST_DIR)/dcmp
+dcmp_CFG := -DVX_CFG_NUM_THREADS=4 -DVX_CFG_EXT_DCMP_ENABLE
 
 vm_TOP := VX_vm_top
 vm_INC := -I$(UNITTEST_DIR)/vm

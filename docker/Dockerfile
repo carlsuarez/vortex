@@ -20,6 +20,10 @@ RUN apt-get update && apt-get install -y \
         ca-certificates git wget curl bzip2 xz-utils perl sudo less vim bc bear \
     && rm -rf /var/lib/apt/lists/*
 
+# pyslang for the synthesis flows' RAM fold (hw/scripts/ram_fold.py), pinned as Vortex's CI pins it.
+RUN apt-get update && apt-get install -y python3-pip && rm -rf /var/lib/apt/lists/* \
+    && pip3 install --no-cache-dir "pyslang>=11,<13"
+
 ARG USERNAME=vortex
 ARG UID=1000
 ARG GID=1000
